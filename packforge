@@ -1,10 +1,105 @@
 #!/bin/bash
 
+# Sanitize language settings to avoid commands bailing out
+# with "unsupported locale setting" errors.
+unset LANG
+unset LANGUAGE
+LC_ALL=C
+export LC_ALL
+
+# Make sure umask is sane
+umask 022
+
+# Keep track of the devstack directory
+TOPDIR=$(cd $(dirname "$0") && pwd)
+
+# Load all libs
+source ${TOPDIR}/libs/common
+source ${TOPDIR}/libs/msg
+
+
 usage () {
-    echo "usage: $0 <build|clean> [project name|all]"
+    echo "USAGE: $0 [OPTIONS] <build|clean> <all|project name>"
+    echo ""
+    echo "Avaible OPTIONS:"
+    echo "  -w, --workers <count>  Fork multiple worker to build packages."
+    echo "                          take action only if you want to build all projects"
+    echo "  -h, --help             Show this help message."
+    echo ""
     exit
 }
 
-if [ $# -lt 1 ]; then
-    usage
-fi
+
+parse_options() {
+    args=$(getopt -o w:h -l workers:,help -- "$@")
+
+    if [ $? -ne 0 ]; then
+        usage >&2
+    fi
+    eval set -- "${args}"
+
+    while true
+    do
+        case $1 in
+            -w|--workers)
+                workers=$2
+                shift 2
+                ;;
+            -h|--help)
+                usage
+                ;;
+            --)
+                shift
+                break
+                ;;
+            *)
+                usage
+                ;;
+        esac
+    done
+    if [ $# -ne 2 ]; then
+        usage
+    fi
+    command=$1
+    project=$2
+}
+
+
+is_valid_command() {
+    local command=$1
+    local avalible_commands=("build" "clean")
+
+    for val in ${avalible_commands[@]}; do
+        if [[ "${val}" == "${command}" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+
+is_valid_project() {
+    local project=$1
+
+    if [[ "all" == "${project}" ]]; then
+        return 0
+    fi
+
+    local avalible_projects=( $(ls ${TOPDIR}/projects) )
+    for val in ${avalible_projects[@]}; do
+        if [[ "${val}" == "${project}" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Parse options
+workers=0
+command=''
+project=''
+parse_options $@
+
+# Validate command and project name
+is_valid_command ${command} || usage
+is_valid_project ${project} || usage
