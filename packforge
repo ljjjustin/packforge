@@ -1,0 +1,10 @@
+#!/bin/bash
+
+usage () {
+    echo "usage: $0 <build|clean> [project name|all]"
+    exit
+}
+
+if [ $# -lt 1 ]; then
+    usage
+fi
