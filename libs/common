@@ -1,0 +1,75 @@
+# libs/common
+# 
+# Common functions.
+#
+# Author: Jiajun Liu <jiajun@unitedstack.com>
+#
+
+source ${TOPDIR}/libs/git
+source ${TOPDIR}/libs/rpm
+
+
+# Load project config
+source_config() {
+    local project=$1
+
+    source ${TOPDIR}/${project}/config
+}
+
+
+# Update project source code
+# update_source_code project branch
+update_source_code() {
+    local project=$1
+    local branch=$2
+    local gitdir=${TOPDIR}/${project}
+
+    ## update source code from git repository 
+    if [ -n "${GITURL}" ]; then
+        git_clone "${GITURL}" "${gitdir}" 
+    fi
+    ## update specified branch
+    git_update_branch "${gitdir}" "${branch}"
+}
+
+
+# Create project source code tarball
+# create_source_code_tarball project
+create_source_code_tarball() {
+    local project=$1
+    local type=${TYPE:-script}
+
+    case $type in
+        python)
+            create_python_src_tarball ${project}
+            ;;
+        script)
+            create_script_src_tarball ${project}
+            ;;
+        *)
+            error "NOT supported package type: ${type}"
+            exit
+            ;;
+    esac
+}
+
+
+# Build one project's all packages
+build_one_project() {
+    local project=$1
+    local branch=${2:-master}
+
+    source_config ${project}
+    ## Step 1: get source code tarball
+    update_source_code ${project} ${branch}
+    create_source_code_tarball ${project}
+    ## Step 2: get latest spec files
+    #
+    ## Step 3: build packages with rpmbuild
+    for spec in $(ls ${TOPDIR}/${project}/*.spec)
+    do
+    done
+    ## Step 4: upload packages to repository
+    #
+    ## Step 5: clean project
+}

@@ -1,0 +1,7 @@
+# libs/rpm
+# 
+# Functions to help build rpm packages.
+#
+# Author: Jiajun Liu <jiajun@unitedstack.com>
+#
+

@@ -18,6 +18,7 @@ source ${TOPDIR}/libs/common
 source ${TOPDIR}/libs/msg
 
 
+## show usage info
 usage () {
     echo "USAGE: $0 [OPTIONS] <build|clean> <all|project name>"
     echo ""
@@ -30,6 +31,7 @@ usage () {
 }
 
 
+## parse cli arguments
 parse_options() {
     args=$(getopt -o w:h -l workers:,help -- "$@")
 
@@ -65,6 +67,7 @@ parse_options() {
 }
 
 
+## check if command is avalible
 is_valid_command() {
     local command=$1
     local avalible_commands=("build" "clean")
@@ -78,6 +81,7 @@ is_valid_command() {
 }
 
 
+## check if project is avalible
 is_valid_project() {
     local project=$1
 
@@ -94,12 +98,38 @@ is_valid_project() {
     return 1
 }
 
+
+## cleanup before exit
+cleanup_on_exit() {
+    exit_code=$?
+
+    # check exit code
+    rm -f ${lockfile}
+    exit ${exit_code}
+}
+
+
 # Parse options
 workers=0
 command=''
 project=''
 parse_options $@
 
+
 # Validate command and project name
 is_valid_command ${command} || usage
 is_valid_project ${project} || usage
+
+
+# Build package
+lockfile="/tmp/packforge/{project}.lock"
+[ -f ${lockfile} ] && { info "Project is under building, exit..."; exit 0 }
+mkdir -p /tmp/packforge && touch ${lockfile}
+
+trap "cleanup_on_exit" EXIT
+
+if [[ "all" == ${project} ]]; then
+    build_all_projects
+else
+    build_one_project ${project}
+fi
