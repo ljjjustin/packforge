@@ -45,3 +45,8 @@ error() {
     local msg=$1
     echo -e "${COLOR_LIGHT_RED}$1${NO_COLOR}"
 }
+
+die() {
+    local msg=$1
+    echo -e "${COLOR_LIGHT_RED}${msg}${NO_COLOR}"
+}

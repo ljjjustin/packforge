@@ -14,7 +14,7 @@ git_clone() {
         git clone ${remote} "${srcdir}"
     fi
     pushd "${srcdir}"
-    git reset --hard
+    git reset --hard HEAD
     git remote set-url origin ${remote}
     popd
 }
@@ -26,7 +26,13 @@ git_update_branch() {
 
     pushd "${srcdir}"
     git fetch origin
-    git checkout -f origin/${branch}
+    # check if branch exists on remote
+    git show origin/${branch} > /dev/null 2>&1
+    if [ $? -ne 0 ]; then
+        die "branch ${branch} do NOT exists, aborting..."
+    fi
+    # checkout branch by force
+    git checkout -f origin/${branch} > /dev/null 2>&1
     # a local branch might not exist
     git branch -D ${branch} || true
     git checkout -b ${branch}

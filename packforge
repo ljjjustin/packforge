@@ -25,6 +25,8 @@ usage () {
     echo "Avaible OPTIONS:"
     echo "  -w, --workers <count>  Fork multiple worker to build packages."
     echo "                          take action only if you want to build all projects"
+    echo "  -b, --branch <branch>  Use which branch to build source code tarball."
+    echo "                          take action only if you have set GITURL in project CONFIG file"
     echo "  -h, --help             Show this help message."
     echo ""
     exit
@@ -33,7 +35,7 @@ usage () {
 
 ## parse cli arguments
 parse_options() {
-    args=$(getopt -o w:h -l workers:,help -- "$@")
+    args=$(getopt -o w:b:h -l workers:,branch:,help -- "$@")
 
     if [ $? -ne 0 ]; then
         usage >&2
@@ -45,6 +47,10 @@ parse_options() {
         case $1 in
             -w|--workers)
                 workers=$2
+                shift 2
+                ;;
+            -b|--branch)
+                branch=$2
                 shift 2
                 ;;
             -h|--help)
@@ -113,6 +119,7 @@ cleanup_on_exit() {
 workers=0
 command=''
 project=''
+branch='master'
 parse_options $@
 
 
@@ -131,5 +138,5 @@ trap "cleanup_on_exit" EXIT
 if [[ "all" == ${project} ]]; then
     build_all_projects
 else
-    build_one_project ${project}
+    build_one_project "${project}" "${branch}"
 fi

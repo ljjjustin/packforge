@@ -6,7 +6,7 @@
 #
 source ${TOPDIR}/libs/git
 source ${TOPDIR}/libs/rpm
-set -x
+#set -x
 
 # Load project config
 source_config() {
