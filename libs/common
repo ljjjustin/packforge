@@ -1,5 +1,5 @@
 # libs/common
-# 
+#
 # Common functions.
 #
 # Author: Jiajun Liu <jiajun@unitedstack.com>
@@ -25,18 +25,21 @@ get_source_code_dir() {
 }
 
 
-# Update project source code
-# update_source_code project branch
-update_source_code() {
+# Fetch project source code
+# fetch_source_code project
+fetch_source_code() {
     local project=$1
-    local branch=$2
     local srcdir=$(get_source_code_dir "${project}")
 
-    ## update source code from git repository 
-    if [ -n "${GITURL}" ]; then
-        git_clone "${GITURL}" "${srcdir}" 
-        git_update_branch "${srcdir}" "${branch}"
+    ## update source code from git repository
+    if [ ! -d "${srcdir}" ]; then
+        mkdir -p "${srcdir}"
     fi
+    if [ ! -d "${srcdir}/.git" ]; then
+        git_clone "${GITURL}" "${srcdir}"
+    fi
+    git_fetch_tag  "${srcdir}"
+    git_fetch_code "${srcdir}"
 }
 
 
@@ -64,13 +67,23 @@ create_source_code_tarball() {
 # Build one project's all packages
 build_one_project() {
     local project=$1
-    local branch=${2:-master}
+    local branch=$2
+    local strategy=$3
 
     ## Change work directory
     pushd "${TOPDIR}/projects/${project}"
     source_config "${project}"
     ## Step 1: get source code tarball
-    update_source_code "${project}" "${branch}"
+    srcdir=$(get_source_code_dir "${project}")
+    if [ -n "${GITURL}" ]; then
+        fetch_source_code "${project}"
+    fi
+    if [ "tag" = "${strategy}" ]; then
+        branch=$(get_latest_tag "${project}")
+        git_update_branch "${srcdir}" "${branch}"
+    else
+        git_update_branch "${srcdir}" "${branch}"
+    fi
     #create_source_code_tarball "${project}"
     ## Step 2: get latest spec files
     #

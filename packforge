@@ -10,7 +10,7 @@ export LC_ALL
 # Make sure umask is sane
 umask 022
 
-# Keep track of the devstack directory
+# Keep track of the top directory
 TOPDIR=$(cd $(dirname "$0") && pwd)
 
 # Load all libs
@@ -23,11 +23,18 @@ usage () {
     echo "USAGE: $0 [OPTIONS] <build|clean> <all|project name>"
     echo ""
     echo "Avaible OPTIONS:"
-    echo "  -w, --workers <count>  Fork multiple worker to build packages."
-    echo "                          take action only if you want to build all projects"
-    echo "  -b, --branch <branch>  Use which branch to build source code tarball."
-    echo "                          take action only if you have set GITURL in project CONFIG file"
-    echo "  -h, --help             Show this help message."
+    echo "  -s, --strategy <tag|commit> Use to controll how we generate source code tarball"
+    echo "                               * tag: generate source code tarball by tag,"
+    echo "                                      this is used to build production packages"
+    echo "                                      and this is the default strategy"
+    echo "                               * commit: generate source code until the latest commit"
+    echo "                                         in the branch specified by -b option, "
+    echo "                                         this is used to build develop packages."
+    echo "  -b, --branch <branch>       Use which branch to build source code tarball."
+    echo "                               take action only if you have set GITURL in project CONFIG file"
+    echo "  -w, --workers <count>       Fork multiple worker to build packages."
+    echo "                                take action only if you want to build all projects"
+    echo "  -h, --help                  Show this help message."
     echo ""
     exit
 }
@@ -45,12 +52,16 @@ parse_options() {
     while true
     do
         case $1 in
-            -w|--workers)
-                workers=$2
+            -s|--strategy)
+                strategy=$2
                 shift 2
                 ;;
             -b|--branch)
                 branch=$2
+                shift 2
+                ;;
+            -w|--workers)
+                workers=$2
                 shift 2
                 ;;
             -h|--help)
@@ -105,6 +116,18 @@ is_valid_project() {
 }
 
 
+## check if strategy is avalible
+is_valid_strategy() {
+    local strategy=$1
+    local avalible_strategies=("tag" "commit")
+
+    for val in ${avalible_strategies[@]}; do
+        if [[ "${val}" == "${strategy}" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
 ## cleanup before exit
 cleanup_on_exit() {
     exit_code=$?
@@ -120,12 +143,14 @@ workers=0
 command=''
 project=''
 branch='master'
+strategy='tag'
 parse_options $@
 
 
 # Validate command and project name
 is_valid_command ${command} || usage
 is_valid_project ${project} || usage
+is_valid_strategy ${strategy} || usage
 
 
 # Build package
