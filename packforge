@@ -122,8 +122,8 @@ is_valid_project ${project} || usage
 
 
 # Build package
-lockfile="/tmp/packforge/{project}.lock"
-[ -f ${lockfile} ] && { info "Project is under building, exit..."; exit 0 }
+lockfile="/tmp/packforge/${project}.lock"
+[ -f ${lockfile} ] && { info "Project is under building, exit..."; exit 0; }
 mkdir -p /tmp/packforge && touch ${lockfile}
 
 trap "cleanup_on_exit" EXIT

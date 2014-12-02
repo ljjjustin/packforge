@@ -68,6 +68,7 @@ build_one_project() {
     ## Step 3: build packages with rpmbuild
     for spec in $(ls ${TOPDIR}/${project}/*.spec)
     do
+        :
     done
     ## Step 4: upload packages to repository
     #
