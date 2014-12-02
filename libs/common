@@ -4,16 +4,24 @@
 #
 # Author: Jiajun Liu <jiajun@unitedstack.com>
 #
-
 source ${TOPDIR}/libs/git
 source ${TOPDIR}/libs/rpm
-
+set -x
 
 # Load project config
 source_config() {
     local project=$1
 
-    source ${TOPDIR}/${project}/config
+    source "${TOPDIR}/projects/${project}/CONFIG"
+}
+
+
+# Get source code directory
+# get_source_code_dir project
+get_source_code_dir() {
+    local project=$1
+
+    echo "${TOPDIR}/projects/${project}/SRC"
 }
 
 
@@ -22,14 +30,13 @@ source_config() {
 update_source_code() {
     local project=$1
     local branch=$2
-    local gitdir=${TOPDIR}/${project}
+    local srcdir=$(get_source_code_dir "${project}")
 
     ## update source code from git repository 
     if [ -n "${GITURL}" ]; then
-        git_clone "${GITURL}" "${gitdir}" 
+        git_clone "${GITURL}" "${srcdir}" 
+        git_update_branch "${srcdir}" "${branch}"
     fi
-    ## update specified branch
-    git_update_branch "${gitdir}" "${branch}"
 }
 
 
@@ -59,18 +66,21 @@ build_one_project() {
     local project=$1
     local branch=${2:-master}
 
-    source_config ${project}
+    ## Change work directory
+    pushd "${TOPDIR}/projects/${project}"
+    source_config "${project}"
     ## Step 1: get source code tarball
-    update_source_code ${project} ${branch}
-    create_source_code_tarball ${project}
+    update_source_code "${project}" "${branch}"
+    #create_source_code_tarball "${project}"
     ## Step 2: get latest spec files
     #
     ## Step 3: build packages with rpmbuild
-    for spec in $(ls ${TOPDIR}/${project}/*.spec)
+    for spec in $(ls *.spec)
     do
-        :
+        info "Building project according to ${spec}..."
     done
     ## Step 4: upload packages to repository
     #
     ## Step 5: clean project
+    popd
 }
