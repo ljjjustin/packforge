@@ -11,39 +11,30 @@ git_clone() {
     local srcdir=$2
 
     git clone --recursive ${remote} "${srcdir}"
-    pushd "${srcdir}"
-    git remote set-url origin ${remote}
-    git reset --hard HEAD
-    popd
+}
+
+
+# git_list_tags
+git_list_tags() {
+    git tag -l
 }
 
 
 # get_fetch_tag srcdir
-git_fetch_tag() {
-    local srcdir=$1
-
-    pushd "${srcdir}"
+git_fetch_tags() {
     git fetch origin --tags
-    popd
 }
 
 
 # get_fetch_tag srcdir
-git_fetch_tag() {
-    local srcdir=$1
-
-    pushd "${srcdir}"
+git_fetch_code() {
     git fetch origin
-    popd
 }
-
 
 # git_update_branch branch
 git_update_branch() {
-    local srcdir=$1
-    local branch=$2
+    local branch=$1
 
-    pushd "${srcdir}"
     git fetch origin
     # check if branch exists on remote
     git show origin/${branch} > /dev/null 2>&1
@@ -55,5 +46,4 @@ git_update_branch() {
     # a local branch might not exist
     git branch -D ${branch} || true
     git checkout -b ${branch}
-    popd
 }

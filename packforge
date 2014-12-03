@@ -160,8 +160,8 @@ mkdir -p /tmp/packforge && touch ${lockfile}
 
 trap "cleanup_on_exit" EXIT
 
-if [[ "all" == ${project} ]]; then
-    build_all_projects
+if [[ "all" == "${project}" ]]; then
+    build_all_projects "${branch}" "${strategy}"
 else
-    build_one_project "${project}" "${branch}"
+    build_one_project "${project}" "${branch}" "${strategy}"
 fi

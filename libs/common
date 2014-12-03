@@ -6,41 +6,6 @@
 #
 source ${TOPDIR}/libs/git
 source ${TOPDIR}/libs/rpm
-#set -x
-
-# Load project config
-source_config() {
-    local project=$1
-
-    source "${TOPDIR}/projects/${project}/CONFIG"
-}
-
-
-# Get source code directory
-# get_source_code_dir project
-get_source_code_dir() {
-    local project=$1
-
-    echo "${TOPDIR}/projects/${project}/SRC"
-}
-
-
-# Fetch project source code
-# fetch_source_code project
-fetch_source_code() {
-    local project=$1
-    local srcdir=$(get_source_code_dir "${project}")
-
-    ## update source code from git repository
-    if [ ! -d "${srcdir}" ]; then
-        mkdir -p "${srcdir}"
-    fi
-    if [ ! -d "${srcdir}/.git" ]; then
-        git_clone "${GITURL}" "${srcdir}"
-    fi
-    git_fetch_tag  "${srcdir}"
-    git_fetch_code "${srcdir}"
-}
 
 
 # Create project source code tarball
@@ -67,22 +32,30 @@ create_source_code_tarball() {
 # Build one project's all packages
 build_one_project() {
     local project=$1
-    local branch=$2
-    local strategy=$3
+    local branch=${2:-master}
+    local strategy=${3:-commit}
 
+    prodir="${TOPDIR}/projects/${project}"
+    config="${TOPDIR}/projects/${project}/CONFIG"
+    srcdir="${TOPDIR}/projects/${project}/SRC"
     ## Change work directory
-    pushd "${TOPDIR}/projects/${project}"
-    source_config "${project}"
-    ## Step 1: get source code tarball
-    srcdir=$(get_source_code_dir "${project}")
-    if [ -n "${GITURL}" ]; then
-        fetch_source_code "${project}"
+    pushd "${prodir}" > /dev/null
+    if [ -r "${config}" ]; then
+        source "${config}"
     fi
-    if [ "tag" = "${strategy}" ]; then
-        branch=$(get_latest_tag "${project}")
-        git_update_branch "${srcdir}" "${branch}"
-    else
-        git_update_branch "${srcdir}" "${branch}"
+    ## Step 1: get source code tarball
+    if [ -n "${GITURL}" ]; then
+        info "Fetching source code from git repository..."
+        if [ ! -d "${srcdir}" ]; then
+            mkdir -p "${srcdir}"
+        fi
+        pushd "${srcdir}" > /dev/null
+        if [ ! -d ".git" ]; then
+            git_clone "${GITURL}" .
+        fi
+        git_fetch_tags
+        git_fetch_code
+        popd > /dev/null
     fi
     #create_source_code_tarball "${project}"
     ## Step 2: get latest spec files
@@ -95,5 +68,5 @@ build_one_project() {
     ## Step 4: upload packages to repository
     #
     ## Step 5: clean project
-    popd
+    popd > /dev/null
 }
