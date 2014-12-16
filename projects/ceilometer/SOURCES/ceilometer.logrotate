@@ -1,0 +1,6 @@
+/var/log/ceilometer/*.log {
+    size 50M
+    rotate 4
+    missingok
+    minsize 1M
+}
