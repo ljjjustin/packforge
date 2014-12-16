@@ -42,7 +42,7 @@ usage () {
 
 ## parse cli arguments
 parse_options() {
-    args=$(getopt -o w:b:h -l workers:,branch:,help -- "$@")
+    args=$(getopt -o w:b:s:h -l workers:,branch:,strategy:,help -- "$@")
 
     if [ $? -ne 0 ]; then
         usage >&2
@@ -143,7 +143,7 @@ workers=0
 command=''
 project=''
 branch='master'
-strategy='tag'
+strategy='commit'
 parse_options $@
 
 

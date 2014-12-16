@@ -29,13 +29,18 @@ git_fetch_tags() {
 # get_fetch_tag srcdir
 git_fetch_code() {
     git fetch origin
+
+    submodules=$(git submodule)
+    if [ ! -n "${submodule}" ]; then
+        git submodule init
+        git submodule update
+    fi
 }
 
 # git_update_branch branch
 git_update_branch() {
     local branch=$1
 
-    git fetch origin
     # check if branch exists on remote
     git show origin/${branch} > /dev/null 2>&1
     if [ $? -ne 0 ]; then
@@ -46,4 +51,16 @@ git_update_branch() {
     # a local branch might not exist
     git branch -D ${branch} || true
     git checkout -b ${branch}
+}
+
+# git_update_tag tag
+git_update_tag() {
+    local tag=$1
+
+    # check if tag exists
+    git show ${tag} > /dev/null 2>&1
+    if [ $? -ne 0 ]; then
+        die "tag ${tag} do NOT exists, aborting..."
+    fi
+    git checkout -f ${tag} > /dev/null 2>&1
 }

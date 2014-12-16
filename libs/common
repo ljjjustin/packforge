@@ -8,42 +8,23 @@ source ${TOPDIR}/libs/git
 source ${TOPDIR}/libs/rpm
 
 
-# Create project source code tarball
-# create_source_code_tarball project
-create_source_code_tarball() {
-    local project=$1
-    local type=${TYPE:-script}
-
-    case $type in
-        python)
-            create_python_src_tarball ${project}
-            ;;
-        script)
-            create_script_src_tarball ${project}
-            ;;
-        *)
-            error "NOT supported package type: ${type}"
-            exit
-            ;;
-    esac
-}
-
-
 # Build one project's all packages
 build_one_project() {
     local project=$1
     local branch=${2:-master}
     local strategy=${3:-commit}
+    local version=""
 
-    prodir="${TOPDIR}/projects/${project}"
+    projectdir="${TOPDIR}/projects/${project}"
     config="${TOPDIR}/projects/${project}/CONFIG"
     srcdir="${TOPDIR}/projects/${project}/SRC"
+    sourcesdir="${TOPDIR}/projects/${project}/SOURCES"
     ## Change work directory
-    pushd "${prodir}" > /dev/null
+    pushd "${projectdir}" > /dev/null
     if [ -r "${config}" ]; then
         source "${config}"
     fi
-    ## Step 1: get source code tarball
+    ## Step 1: update source code
     if [ -n "${GITURL}" ]; then
         info "Fetching source code from git repository..."
         if [ ! -d "${srcdir}" ]; then
@@ -55,15 +36,78 @@ build_one_project() {
         fi
         git_fetch_tags
         git_fetch_code
+        if [ "commit" = "${strategy}" ]; then
+            git_update_branch "${branch}"
+            latest_commit=$(git rev-parse --short HEAD)
+            timeofday=$(date '+%Y%m%d.%H%M%S')
+            version="${timeofday}.${latest_commit}"
+        elif [ "tag" = "${strategy}" ]; then
+            version=$(git_list_tags | sort -t '.' -k1,1n -k2,2n -k3,3n | tail -1)
+            git_update_tag "${version}"
+        fi
         popd > /dev/null
     fi
-    #create_source_code_tarball "${project}"
-    ## Step 2: get latest spec files
-    #
+    ## Step 2: create source code tarball
+    if [ -n "${URL}" ]; then
+        info "Downloading source code from Internet..."
+        pushd "${sourcesdir}" > /dev/null
+        source_code_tarball=${URL##*/}
+        if [ ! -f "${source_code_tarball}" ]; then
+            wget -c -O "${source_code_tarball}" "${URL}"
+        fi
+        popd > /dev/null
+    elif [ -n "${GITURL}" ]; then
+        info "Creating source code tarball from git repository..."
+        pushd "${srcdir}" > /dev/null
+        source_code_dir="${project}-${version}"
+        source_code_tarball="${source_code_dir}.tar.gz"
+        type=${TYPE:-script}
+        case $type in
+            python)
+                python setup.py sdist --quiet > /dev/null
+                pushd "${srcdir}/dist" > /dev/null
+                if [ ! -f "${source_code_tarball}" ]; then
+                    tar -xf *.tar.gz
+                    origin_src_dir=$(ls -F | grep '/')
+                    mv -f "${origin_src_dir}" "${source_code_dir}"
+                    tar -czf "${source_code_tarball}" "${source_code_dir}"
+                    rm -fr "${source_code_dir}"
+                fi
+                popd > /dev/null
+                mv -f "${srcdir}/dist/${source_code_tarball}" "${sourcesdir}"
+                ;;
+            script)
+                cp -arl "${srcdir}" "${sourcesdir}"
+                pushd "${sourcesdir}" > /dev/null
+                find -name ".git" | xargs rm -rf
+                mv -f "${srcdir##*/}" "${source_code_dir}"
+                tar -czf "${source_code_tarball}" "${source_code_dir}"
+                rm -fr "${source_code_dir}"
+                popd > /dev/null
+                ;;
+            *)
+                error "NOT supported package type: ${type}"
+                exit
+                ;;
+        esac
+        popd > /dev/null
+    fi
     ## Step 3: build packages with rpmbuild
     for spec in $(ls *.spec)
     do
         info "Building project according to ${spec}..."
+        old_version=$(awk '/^Version/ {print $2}' "${spec}")
+        old_release=$(awk '/^Release/ {print $2}' "${spec}" | cut -d '%' -f1)
+        if [ "${old_version}" != "${version}" ]; then
+            new_release=${new_release:-1}
+            sed -i "s/Version:\([ \t]*\).*$/Version:\1${version}/g" "${spec}"
+            sed -i "s/Release:\([ \t]*\)\([0-9]*\)\(.*$\)/Release:\1${new_release}\3/g" "${spec}"
+        else
+            old_release=${old_release:-0}
+            new_release=$(expr "${old_release}" + 1)
+            sed -i "s/Release:\([ \t]*\)\([0-9]*\)\(.*$\)/Release:\1${new_release}\3/g" "${spec}"
+        fi
+        rpm_build_package "${spec}"
     done
     ## Step 4: upload packages to repository
     #

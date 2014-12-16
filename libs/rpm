@@ -5,3 +5,9 @@
 # Author: Jiajun Liu <jiajun@unitedstack.com>
 #
 
+# rpm_build_package spec
+rpm_build_package() {
+    local spec=$1
+
+    rpmbuild --define "_topdir `pwd`" --clean -bb "${spec}"
+}

@@ -31,7 +31,7 @@ debug() {
 
 info() {
     local msg=$1
-    echo -e "${COLOR_GREEN}$1${NO_COLOR}"
+    echo -e "${COLOR_LIGHT_GREEN}$1${NO_COLOR}"
 }
 
 
