@@ -1,0 +1,2 @@
+TYPE=python
+GITURL=git@git.ustack.com:united_openstack/python-cinderclient.git
