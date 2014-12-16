@@ -1,0 +1,13 @@
+*.tar.gz
+*.tar.xz
+*.asc
+*.bz2
+*.zip
+*.tgz
+*.swp
+BUILD
+BUILDROOT
+RPMS
+SPECS
+SRC
+SRPMS
