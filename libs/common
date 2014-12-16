@@ -48,6 +48,9 @@ build_one_project() {
         popd > /dev/null
     fi
     ## Step 2: create source code tarball
+    if [ ! -d "${sourcesdir}" ]; then
+        mkdir -p "${sourcesdir}"
+    fi
     if [ -n "${URL}" ]; then
         info "Downloading source code from Internet..."
         pushd "${sourcesdir}" > /dev/null
