@@ -1,0 +1,6 @@
+/var/log/gringotts/*.log {
+    size 50M
+    rotate 5
+    missingok
+    minsize 1M
+}
