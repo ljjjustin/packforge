@@ -1,0 +1,20 @@
+diff -up SQLAlchemy-0.9.7/sqla_nose.py.nose-use-build SQLAlchemy-0.9.7/sqla_nose.py
+--- SQLAlchemy-0.9.7/sqla_nose.py.nose-use-build	2014-07-29 13:07:44.151453336 +0200
++++ SQLAlchemy-0.9.7/sqla_nose.py	2014-07-29 13:09:15.096785664 +0200
+@@ -11,13 +11,14 @@ import nose
+ import warnings
+ 
+ 
++import glob
+ from os import path
+-for pth in ['./lib']:
++for pth in glob.glob('build/lib*'):
+     sys.path.insert(0, path.join(path.dirname(path.abspath(__file__)), pth))
+ 
+ # installing without importing SQLAlchemy, so that coverage includes
+ # SQLAlchemy itself.
+-path = "lib/sqlalchemy/testing/plugin/noseplugin.py"
++path = glob.glob("build/lib*/sqlalchemy/testing/plugin/noseplugin.py")[0]
+ if sys.version_info >= (3, 3):
+     from importlib import machinery
+     noseplugin = machinery.SourceFileLoader("noseplugin", path).load_module()

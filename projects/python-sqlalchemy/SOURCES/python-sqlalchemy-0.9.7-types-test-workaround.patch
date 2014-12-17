@@ -1,0 +1,12 @@
+diff -up SQLAlchemy-0.9.7/lib/sqlalchemy/sql/elements.py.types-test-workaround SQLAlchemy-0.9.7/lib/sqlalchemy/sql/elements.py
+--- SQLAlchemy-0.9.7/lib/sqlalchemy/sql/elements.py.types-test-workaround	2014-07-22 22:54:20.000000000 +0200
++++ SQLAlchemy-0.9.7/lib/sqlalchemy/sql/elements.py	2014-07-29 16:43:27.921221412 +0200
+@@ -3268,7 +3268,7 @@ class _defer_name(_truncated_label):
+     generation.
+ 
+     """
+-    def __new__(cls, value):
++    def __new__(cls, value, *rest):
+         if value is None:
+             return _NONE_NAME
+         elif isinstance(value, conv):
