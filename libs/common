@@ -54,8 +54,12 @@ build_one_project() {
     if [ -n "${URL}" ]; then
         info "Downloading source code from Internet..."
         source_code_tarball=${URL##*/}
-        version_info=${source_code_tarball##*-}
-        version=${version_info%.tar*}
+        if [ -n "${VERSION}" ]; then
+            version="${VERSION}"
+        else
+            version_info=${source_code_tarball##*-}
+            version=$(echo "${version_info}" | awk -F. '{printf("%s.%s.%s", $1,$2,$3)}')
+        fi
         pushd "${sourcesdir}" > /dev/null
         if [ ! -f "${source_code_tarball}" ]; then
             wget -c -O "${source_code_tarball}" "${URL}"
