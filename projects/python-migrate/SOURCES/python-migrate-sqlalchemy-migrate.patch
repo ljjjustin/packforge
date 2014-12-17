@@ -1,0 +1,14 @@
+diff -Naur sqlalchemy-migrate-0.9.1.orig/setup.cfg sqlalchemy-migrate-0.9.1/setup.cfg
+--- sqlalchemy-migrate-0.9.1.orig/setup.cfg	2014-05-06 14:40:25.000000000 +0000
++++ sqlalchemy-migrate-0.9.1/setup.cfg	2014-06-13 18:09:14.150005083 +0000
+@@ -23,8 +23,8 @@
+ 
+ [entry_points]
+ console_scripts = 
+-	migrate = migrate.versioning.shell:main
+-	migrate-repository = migrate.versioning.migrate_repository:main
++	sqlalchemy-migrate = migrate.versioning.shell:main
++	sqlalchemy-migrate-repository = migrate.versioning.migrate_repository:main
+ 
+ [build_sphinx]
+ all_files = 1
