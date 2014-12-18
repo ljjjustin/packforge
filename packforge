@@ -30,6 +30,8 @@ usage () {
     echo "                               * commit: generate source code until the latest commit"
     echo "                                         in the branch specified by -b option, "
     echo "                                         this is used to build develop packages."
+    echo "  -t, --tag <tag>             Specify a specific tag to use for a project"
+    echo "                               take action only if your strategy is 'tag'"
     echo "  -b, --branch <branch>       Use which branch to build source code tarball."
     echo "                               take action only if you have set GITURL in project CONFIG file"
     echo "  -w, --workers <count>       Fork multiple worker to build packages."
@@ -42,7 +44,7 @@ usage () {
 
 ## parse cli arguments
 parse_options() {
-    args=$(getopt -o w:b:s:h -l workers:,branch:,strategy:,help -- "$@")
+    args=$(getopt -o w:b:s:t:h -l workers:,branch:,strategy:,tag:,help -- "$@")
 
     if [ $? -ne 0 ]; then
         usage >&2
@@ -54,6 +56,10 @@ parse_options() {
         case $1 in
             -s|--strategy)
                 strategy=$2
+                shift 2
+                ;;
+            -t|--tag)
+                tag=$2
                 shift 2
                 ;;
             -b|--branch)
@@ -144,6 +150,7 @@ command=''
 project=''
 branch='master'
 strategy='commit'
+tag='latest'
 parse_options $@
 
 
@@ -172,5 +179,5 @@ fi
 if [[ "all" == "${project}" ]]; then
     build_all_projects "${branch}" "${strategy}"
 else
-    build_one_project "${project}" "${branch}" "${strategy}"
+    build_one_project "${project}" "${branch}" "${strategy}" "${tag}"
 fi

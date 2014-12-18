@@ -13,6 +13,7 @@ build_one_project() {
     local project=$1
     local branch=${2:-master}
     local strategy=${3:-commit}
+    local tag=${4:-latest}
     local version=""
 
     projectdir="${TOPDIR}/projects/${project}"
@@ -42,7 +43,11 @@ build_one_project() {
             timeofday=$(date '+%Y%m%d.%H%M%S')
             version="${timeofday}.${latest_commit}"
         elif [ "tag" = "${strategy}" ]; then
-            version=$(git_list_tags | sort -t '.' -k1,1n -k2,2n -k3,3n | tail -1)
+            if [ "latest" = "${tag}" ]; then
+                version=$(git_list_tags | sort -t '.' -k1,1n -k2,2n -k3,3n | tail -1)
+            else
+                version="${tag}"
+            fi
             git_update_tag "${version}"
         fi
         popd > /dev/null
