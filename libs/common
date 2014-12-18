@@ -53,17 +53,19 @@ build_one_project() {
     fi
     if [ -n "${URL}" ]; then
         info "Downloading source code from Internet..."
-        pushd "${sourcesdir}" > /dev/null
         source_code_tarball=${URL##*/}
+        version_info=${source_code_tarball##*-}
+        version=${version_info%.tar*}
+        pushd "${sourcesdir}" > /dev/null
         if [ ! -f "${source_code_tarball}" ]; then
             wget -c -O "${source_code_tarball}" "${URL}"
         fi
         popd > /dev/null
     elif [ -n "${GITURL}" ]; then
         info "Creating source code tarball from git repository..."
-        pushd "${srcdir}" > /dev/null
         source_code_dir="${project}-${version}"
         source_code_tarball="${source_code_dir}.tar.gz"
+        pushd "${srcdir}" > /dev/null
         type=${TYPE:-script}
         case $type in
             python)
