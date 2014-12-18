@@ -1,0 +1,30 @@
+From 6653bc83e257cd5bdd2c12b28471ca378cc25d8a Mon Sep 17 00:00:00 2001
+From: Miroslav Rezanina <mrezanin@redhat.com>
+Date: Fri, 29 Aug 2014 12:27:43 +0200
+Subject: Use kvm by default
+
+Use kvm as default accelerator if available.
+
+Signed-off-by: Miroslav Rezanina <mrezanin@redhat.com>
+---
+ vl.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/vl.c b/vl.c
+index 7f8bd39..98930c0 100644
+--- a/vl.c
++++ b/vl.c
+@@ -2684,8 +2684,8 @@ static int configure_accelerator(MachineClass *mc)
+ 
+     p = qemu_opt_get(qemu_get_machine_opts(), "accel");
+     if (p == NULL) {
+-        /* Use the default "accelerator", tcg */
+-        p = "tcg";
++        /* Use kvm as default accelerator */
++        p = "kvm:tcg";
+     }
+ 
+     while (!accel_initialised && *p != '\0') {
+-- 
+1.9.3
+
