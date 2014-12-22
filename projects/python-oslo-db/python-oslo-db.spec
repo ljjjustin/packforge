@@ -2,13 +2,18 @@
 %global pypi_name oslo.db
 
 Name:           python-oslo-db
-Version:        0.4.0
-Release:        2%{?dist}
+Version:        1.0.2
+Release:        1%{?dist}
 Summary:        OpenStack oslo.db library
 
 License:        ASL 2.0
 URL:            http://launchpad.net/oslo
 Source0:        https://pypi.python.org/packages/source/o/%{pypi_name}/%{pypi_name}-%{version}.tar.gz
+#
+# patches_base=
+#
+Patch0001: 0001-Ensure-create_engine-retries-the-initial-connection.patch
+
 BuildArch:      noarch
 
 BuildRequires:  python2-devel
@@ -46,6 +51,9 @@ Documentation for the Oslo database handling library.
 
 %prep
 %setup -q -n %{pypi_name}-%{version}
+
+%patch0001 -p1
+
 # Let RPM handle the dependencies
 rm -f requirements.txt
 # make doc build compatible with python-oslo-sphinx RPM
@@ -75,6 +83,18 @@ rm -rf html/.{doctrees,buildinfo}
 %doc html LICENSE
 
 %changelog
+* Tue Oct 07 2014 Alan Pevec <alan.pevec@redhat.com> 1.0.2-2
+- keep trying to connect to the database on startup rhbz#1144181
+
+* Thu Oct 02 2014 Alan Pevec <alan.pevec@redhat.com> 1.0.2-1
+- Update to upstream 1.0.2
+
+* Sat Sep 20 2014 Alan Pevec <apevec@redhat.com> - 1.0.1-1
+- Update to upstream 1.0.1
+
+* Wed Sep 17 2014 Alan Pevec <apevec@redhat.com> - 0.5.0-1
+- Update to upstream 0.5.0
+
 * Thu Sep 11 2014 Alan Pevec <apevec@redhat.com> - 0.4.0-2
 - update dependencies
 
