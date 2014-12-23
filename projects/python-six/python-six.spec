@@ -9,7 +9,7 @@
 %endif
 
 Name:           python-six
-Version:        1.4.1
+Version:        1.7.3
 Release:        3%{?dist}
 Summary:        Python 2 and 3 compatibility utilities
 
@@ -17,10 +17,9 @@ Group:          Development/Languages
 License:        MIT
 URL:            http://pypi.python.org/pypi/six/
 Source0:        http://pypi.python.org/packages/source/s/six/six-%{version}.tar.gz
-BuildRoot:      %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 
 BuildArch:      noarch
-BuildRequires:  python-devel
+BuildRequires:  python2-devel
 # For use by selftests:
 BuildRequires:  pytest
 BuildRequires:  tkinter
@@ -66,7 +65,6 @@ popd
 %endif
 
 %install
-rm -rf $RPM_BUILD_ROOT
 %if 0%{?with_python3}
 pushd %{py3dir}
 %{__python3} setup.py install -O1 --skip-build --root $RPM_BUILD_ROOT
@@ -74,9 +72,6 @@ popd
 %endif
 %{__python} setup.py install -O1 --skip-build --root $RPM_BUILD_ROOT
 
-
-%clean
-rm -rf $RPM_BUILD_ROOT
 
 %check
 py.test -rfsxX test_six.py
@@ -88,19 +83,32 @@ popd
 
 
 %files
-%defattr(-,root,root,-)
 %doc LICENSE README documentation/index.rst
 %{python_sitelib}/*
 
 %if 0%{?with_python3}
 %files -n python3-six
-%defattr(-,root,root,-)
 %doc LICENSE README documentation/index.rst
 %{python3_sitelib}/*
 %endif
 
 
 %changelog
+* Thu Jul 31 2014 Pádraig Brady <pbrady@redhat.com> - 1.7.3-1
+- Latest upstream
+
+* Sat Jun 07 2014 Fedora Release Engineering <rel-eng@lists.fedoraproject.org> - 1.6.1-3
+- Rebuilt for https://fedoraproject.org/wiki/Fedora_21_Mass_Rebuild
+
+* Thu May 08 2014 Orion Poplawski <orion@cora.nwra.com> - 1.6.1-2
+- Rebuild for Python 3.4
+
+* Tue Apr 29 2014 Matthias Runge <mrugne@redhat.com> - 1.6.1-1
+- upgrade to 1.6.1 (rhbz#1076578)
+
+* Fri Mar 07 2014 Matthias Runge <mrunge@redhat.com> - 1.5.2-1
+- upgrade to 1.5.2 (rhbz#1048819)
+
 * Mon Sep 16 2013 Bohuslav Kabrda <bkabrda@redhat.com> - 1.4.1-1
 - 1.4.1
 
