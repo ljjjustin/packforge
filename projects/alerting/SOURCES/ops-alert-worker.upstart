@@ -1,0 +1,8 @@
+description "Ops Alert Worker"
+
+start on stopped rc RUNLEVEL=[2345]
+stop on runlevel [S016]
+
+respawn
+
+exec su -s /bin/sh -c "exec /usr/bin/alert-worker --config-file /etc/alerting/alerting.conf --logfile /var/log/alerting/alerting.log" alerting 
