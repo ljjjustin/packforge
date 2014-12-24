@@ -1,0 +1,44 @@
+diff -Naur openswan-2.6.32-orig/programs/barf/barf.in openswan-2.6.32/programs/barf/barf.in
+--- openswan-2.6.32-orig/programs/barf/barf.in	2013-07-11 15:28:39.033000071 -0400
++++ openswan-2.6.32/programs/barf/barf.in	2013-07-11 15:29:40.649999433 -0400
+@@ -297,21 +297,19 @@
+ 	fi
+ fi
+ _________________________ iptables
+-if test -r /sbin/iptables-save
++if test -r /sbin/iptables-save -a -e /proc/net/ip_tables_names 
+ then
+-	iptables-save
+-	_________________________ iptables-nat
+-	iptables-save -t nat
+-	_________________________ iptables-mangle
+-	iptables-save -t mangle
++	iptables-save --modprobe=/dev/null
+ else
+-	if test -r /sbin/iptables
++	if test -r /sbin/iptables -a -e /proc/net/ip_tables_names
+ 	then
+ 		iptables -L -v -n
+ 		_________________________ iptables-nat
+-		iptables -t nat -L -v -n
++		grep ^nat /proc/net/ip_tables_names > /dev/null 2>/dev/null &&
++			iptables -t nat -L -v -n
+ 		_________________________ iptables-mangle
+-		iptables -t mangle -L -v -n
++		grep ^mangle /proc/net/ip_tables_names > /dev/null 2>/dev/null &&
++			iptables -t mangle -L -v -n
+ 	fi
+ fi
+ _________________________ /proc/modules
+diff -Naur openswan-2.6.32-orig/programs/look/look.in openswan-2.6.32/programs/look/look.in
+--- openswan-2.6.32-orig/programs/look/look.in	2010-12-17 20:23:54.000000000 -0500
++++ openswan-2.6.32/programs/look/look.in	2013-07-11 15:31:09.773998547 -0400
+@@ -88,7 +88,7 @@
+ 	done
+ fi
+ echo IPSEC TABLE
+-iptables -n -t mangle -L IPSEC
++grep ^mangle /proc/net/ip_tables_names >/dev/null 2>/dev/null && iptables -n -t mangle -L IPSEC
+ echo ROUTING TABLE
+ ip route | egrep "$pat"
+ 

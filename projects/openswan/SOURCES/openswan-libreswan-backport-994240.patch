@@ -1,0 +1,131 @@
+--- openswan-2.6.32-orig/programs/pluto/kernel.c	2013-08-16 14:56:56.773512018 -0400
++++ openswan-2.6.32-orig/programs/pluto/kernel.c	2013-08-16 15:09:35.711598464 -0400
+@@ -1360,6 +1360,7 @@ 
+ 
+     char text_said[SATOT_BUF];
+     int encapsulation;
++    bool add_selector;
+ 
+     replace = inbound && (kernel_ops->get_spi != NULL);
+ 
+@@ -1381,12 +1382,17 @@ 
+         dst_client = c->spd.that.client;
+     }
+ 
+-    encapsulation = ENCAPSULATION_MODE_TRANSPORT;
+     if (st->st_ah.attrs.encapsulation == ENCAPSULATION_MODE_TUNNEL
+         || st->st_esp.attrs.encapsulation == ENCAPSULATION_MODE_TUNNEL
+         || st->st_ipcomp.attrs.encapsulation == ENCAPSULATION_MODE_TUNNEL)
+     {
+-        encapsulation = ENCAPSULATION_MODE_TUNNEL;
++	encapsulation = ENCAPSULATION_MODE_TUNNEL;
++	add_selector = 0;	/* Don't add selectors for tunnel mode */
++    } else {
++	encapsulation = ENCAPSULATION_MODE_TRANSPORT;
++	/* RFC 4301, Section 5.2 Requires traffic selectors to be set on
++	 * transport mode */
++	add_selector = 1;
+     }
+ 
+     memset(said, 0, sizeof(said));
+@@ -1429,6 +1435,8 @@ 
+         said_next->dst = &dst.addr;
+         said_next->src_client = &src_client;
+         said_next->dst_client = &dst_client;
++	said_next->inbound = inbound;
++	said_next->add_selector = add_selector;
+         said_next->transport_proto = c->spd.this.protocol;
+         said_next->spi = ipip_spi;
+         said_next->esatype = ET_IPIP;
+@@ -1522,6 +1530,8 @@ 
+         said_next->dst = &dst.addr;
+         said_next->src_client = &src_client;
+         said_next->dst_client = &dst_client;
++	said_next->inbound = inbound;
++	said_next->add_selector = add_selector;
+         said_next->transport_proto = c->spd.this.protocol;
+         said_next->spi = ipcomp_spi;
+         said_next->esatype = ET_IPCOMP;
+@@ -1747,6 +1757,8 @@ 
+         said_next->dst = &dst.addr;
+         said_next->src_client = &src_client;
+         said_next->dst_client = &dst_client;
++	said_next->inbound = inbound;
++	said_next->add_selector = add_selector;
+         said_next->transport_proto = c->spd.this.protocol;
+         said_next->spi = esp_spi;
+         said_next->esatype = ET_ESP;
+@@ -1889,6 +1901,8 @@ 
+         said_next->dst = &dst.addr;
+         said_next->src_client = &src_client;
+         said_next->dst_client = &dst_client;
++	said_next->inbound = inbound;
++	said_next->add_selector = add_selector;
+         said_next->transport_proto = c->spd.this.protocol;
+         said_next->spi = ah_spi;
+         said_next->esatype = ET_AH;
+--- openswan-2.6.32-orig/programs/pluto/kernel.h	2013-08-16 14:56:56.774512030 -0400
++++ openswan-2.6.32-orig/programs/pluto/kernel.h	2013-08-16 15:09:35.711598464 -0400
+@@ -77,6 +77,8 @@ 
+ 	const ip_subnet *src_client;
+ 	const ip_subnet *dst_client;
+ 
++	bool inbound;
++	bool add_selector;
+ 	ipsec_spi_t spi;
+ 	unsigned proto;
+ 	unsigned int transport_proto;
+--- openswan-2.6.32-orig/programs/pluto/kernel_netlink.c	2013-08-16 14:56:56.779512089 -0400
++++ openswan-2.6.32-orig/programs/pluto/kernel_netlink.c	2013-08-16 15:10:14.532063413 -0400
+@@ -814,6 +814,33 @@ 
+     else
+     {
+ 	req.p.mode = XFRM_MODE_TRANSPORT;
++    }
++
++    /* We only add traffic selectors for transport mode. The problem is that
++     * Tunnel mode ipsec with ipcomp is layered so that ipcomp tunnel is
++     * protected with transport mode ipsec but in this case we shouldn't any
++     * more add traffic selectors. Caller function will inform us if we
++     * need or don't need selectors. */
++    if (sa->add_selector) {
++	ip_subnet src_tmp;
++	ip_subnet dst_tmp;
++	const ip_subnet *src;
++	const ip_subnet *dst;
++
++	/* With XFRM/NETKEY and transport mode with nat-traversal we need
++	 * to change outbound IPsec SA to point to exteral ip of the peer.
++	 * Here we substitute real client ip with NATD ip. */
++	if (sa->inbound == 0) {
++	    addrtosubnet(sa->dst, &dst_tmp);
++	    dst = &dst_tmp;
++	} else
++	    dst = sa->dst_client;
++
++	if (sa->inbound == 1) {
++	    addrtosubnet(sa->src, &src_tmp);
++	    src = &src_tmp;
++	} else
++	    src = sa->src_client;
+ 
+ 	if(!sameaddr(sa->src, sa->dst)) {
+ 	req.p.sel.sport = portof(&sa->src_client->addr);
+@@ -846,12 +873,12 @@ 
+ 
+ 	req.p.sel.sport_mask = (req.p.sel.sport) ? ~0:0;
+ 	req.p.sel.dport_mask = (req.p.sel.dport) ? ~0:0;
+-	ip2xfrm(&sa->src_client->addr, &req.p.sel.saddr);
+-	ip2xfrm(&sa->dst_client->addr, &req.p.sel.daddr);
+-	req.p.sel.prefixlen_s = sa->src_client->maskbits;
+-	req.p.sel.prefixlen_d = sa->dst_client->maskbits;
++	ip2xfrm(&src->addr, &req.p.sel.saddr);
++	ip2xfrm(&dst->addr, &req.p.sel.daddr);
++	req.p.sel.prefixlen_s = src->maskbits;
++	req.p.sel.prefixlen_d = dst->maskbits;
+ 	req.p.sel.proto = sa->transport_proto;
+-	req.p.sel.family = sa->src_client->addr.u.v4.sin_family;
++	req.p.sel.family = src->addr.u.v4.sin_family;
+ 	}
+ 
+     }

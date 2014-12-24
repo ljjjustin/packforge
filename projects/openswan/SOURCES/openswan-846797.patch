@@ -1,0 +1,61 @@
+diff -urNp openswan-2.6.32-patched/programs/pluto/pending.c openswan-2.6.32-current/programs/pluto/pending.c
+--- openswan-2.6.32-patched/programs/pluto/pending.c	2012-08-24 11:21:37.108253078 -0400
++++ openswan-2.6.32-current/programs/pluto/pending.c	2012-08-24 11:50:40.926995030 -0400
+@@ -82,11 +82,26 @@ add_pending(int whack_sock
+ #endif
+ )
+ {
+-    struct pending *p = alloc_thing(struct pending, "struct pending");
++    struct pending *p, **pp;
++
++    /* look for duplicate pending phase #2, skip add operation */
++    pp = host_pair_first_pending(c);
++
++    for ( p = pp ? *pp : NULL ; p != NULL; p = p->next)
++    {
++	if (p->connection == c && p->isakmp_sa == isakmp_sa)
++	{
++	    DBG(DBG_CONTROL, DBG_log("Ignored already queued up pending Quick Mode with %s \"%s\""
++		, ip_str(&c->spd.that.host_addr), c->name));
++	    return;
++	}
++    }
+ 
+     DBG(DBG_CONTROL, DBG_log("Queuing pending Quick Mode with %s \"%s\""
+ 	, ip_str(&c->spd.that.host_addr)
+ 	, c->name));
++
++    p = alloc_thing(struct pending, "struct pending");
+     p->whack_sock = whack_sock;
+     p->isakmp_sa = isakmp_sa;
+     p->connection = c;
+@@ -250,12 +265,11 @@ bool pending_check_timeout(struct connec
+ {
+     struct pending **pp, *p;
+     time_t n = time(NULL);
+-    bool restart = FALSE;
+ 
+     for (pp = host_pair_first_pending(c); (p = *pp) != NULL; )
+     {
+ 	DBG(DBG_DPD,
+-	    DBG_log("checking connection \"%s\" for stuck phase 2s %lu+%lu <= %lu"
++	    DBG_log("checking connection \"%s\" for stuck phase 2s (%lu+ 3*%lu) <= %lu"
+ 		    , c->name
+ 		    , (unsigned long)p->pend_time
+ 		    , (unsigned long)c->dpd_timeout
+@@ -263,12 +277,13 @@ bool pending_check_timeout(struct connec
+ 		    
+ 	if(c->dpd_timeout > 0) {
+ 	    if((p->pend_time + c->dpd_timeout*3) <= n) {
+-		restart = TRUE;
++		DBG(DBG_DPD, DBG_log("connection \"%s\" stuck, restarting", c->name));
++		return TRUE;
+ 	    }
+ 	}
+ 	pp = &p->next;
+     }
+-    return restart;
++    return FALSE;
+ }
+ 
+ /* a Main Mode negotiation has been replaced; update any pending */

@@ -1,0 +1,1943 @@
+diff -Naur openswan-2.6.32-rhel-orig/include/ietf_constants.h openswan-2.6.32/include/ietf_constants.h
+--- openswan-2.6.32-rhel-orig/include/ietf_constants.h	2013-04-03 15:32:14.620705987 -0400
++++ openswan-2.6.32/include/ietf_constants.h	2013-04-03 15:37:49.366662666 -0400
+@@ -299,6 +299,8 @@
+ 
+ #define IKE_UDP_PORT	500
+ 
++#define NON_ESP_MARKER_SIZE 4  /* RFC3948: bytes of zeros, same size as ESP SPI */
++
+ /* Version numbers - IKEv1 */
+ #define ISAKMP_MAJOR_VERSION   0x1
+ #define ISAKMP_MINOR_VERSION   0x0
+@@ -379,7 +381,8 @@
+ 
+ 	/* SPECIAL CASES */
+ 	ISAKMP_NEXT_NATD_DRAFTS  = 130,   /* NAT-Traversal: NAT-D (drafts) */
+-	ISAKMP_NEXT_NATOA_DRAFTS = 131   /* NAT-Traversal: NAT-OA (drafts) */
++	ISAKMP_NEXT_NATOA_DRAFTS = 131,   /* NAT-Traversal: NAT-OA (drafts) */
++	ISAKMP_NEXT_IKE_FRAGMENTATION = 132,    /* Cisco proprietary IKE fragmentation */
+ };
+ 
+ /* These values are to be used within the Type field of an Attribute (14) 
+diff -Naur openswan-2.6.32-rhel-orig/include/ipsecconf/keywords.h openswan-2.6.32/include/ipsecconf/keywords.h
+--- openswan-2.6.32-rhel-orig/include/ipsecconf/keywords.h	2013-04-03 15:32:14.620705987 -0400
++++ openswan-2.6.32/include/ipsecconf/keywords.h	2013-04-03 17:38:51.172847548 -0400
+@@ -111,6 +111,7 @@
+     KBF_SAREFTRACK, /* saref tracking paramter for _updown */
+     KBF_WARNIGNORE, /* to ignore obsoleted keywords */
+     KBF_SECCTX, /*security context attribute value for labeled ipsec*/
++    KBF_IKE_FRAG,
+     KBF_MAX         
+ };
+ 
+@@ -144,8 +145,6 @@
+     KSCF_SUBNETS      = 17,
+     KSCF_MODECFGDNS1  = 18,
+     KSCF_MODECFGDNS2  = 19,
+-    KSCF_MODECFGWINS1 = 20,
+-    KSCF_MODECFGWINS2 = 21,
+     KSCF_MAX          
+ };
+ 
+diff -Naur openswan-2.6.32-rhel-orig/include/packet.h openswan-2.6.32/include/packet.h
+--- openswan-2.6.32-rhel-orig/include/packet.h	2013-04-03 15:32:14.593705668 -0400
++++ openswan-2.6.32/include/packet.h	2013-04-03 15:42:05.268682825 -0400
+@@ -12,7 +12,8 @@
+  * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+  * for more details.
+  *
+- * RCSID $Id: packet.h,v 1.29 2004/10/16 22:38:37 mcr Exp $
++ * Copyright (C) 2013 Wolfgang Nothdurft <wolfgang@linogate.de>
++ * Copyright (C) 2013 Paul Wouters <paul@libreswan.org>
+  */
+ 
+ #ifndef _PACKET_H
+@@ -659,6 +660,52 @@
+ extern struct_desc isakmp_nat_d;
+ extern struct_desc isakmp_nat_oa;
+ 
++/* ISAKMP IKE Fragmentation Payload
++ * Cisco proprietary, undocumented
++ * Microsoft documentation link: http://msdn.microsoft.com/en-us/library/cc233452.aspx
++ * This must be the first and only payload in a message,
++ * i.e. next payload field must always be zero.
++ *                      1                   2                   3
++ *  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++ * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
++ * ! Next Payload  !   RESERVED    !         Payload Length        !
++ * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
++ * !          Fragment_ID          !  Fragment_num !     Flags     !
++ * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
++ * !                                                               !
++ * ~                         Fragment Data                         ~
++ * !                                                               !
++ * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
++ */
++#define NSIZEOF_isakmp_ikefrag  8       /* on-the-wire sizeof struct isakmpg_ikefrag */
++struct isakmp_ikefrag
++{
++        u_int8_t    isafrag_np; /* always zero, this must be the only payload */
++        u_int8_t    isafrag_reserved;
++        u_int16_t   isafrag_length;
++        u_int16_t   isafrag_id; /* MUST specify the same value for each fragment
++                                   generated from the same IKE message */
++        u_int8_t    isafrag_number;
++        u_int8_t    isafrag_flags; /* LAST_FRAGMENT =  0x01 */
++};
++
++extern struct_desc isakmp_ikefrag_desc;
++
++/*
++ * What is a sane and safe value? iOS/Apple uses 1280, stock racoon uses 552.
++ * Why is there no RFC to guide interop people here :/ 
++ */
++#define ISAKMP_FRAG_MAXLEN_IPv4      552  /* 576 - 24 (2*4 + 16) */
++#define ISAKMP_FRAG_MAXLEN_IPv6      1240
++
++/*
++ * This a really the least significant bit in the flags octet, but it's the
++ * only flag at the moment. Should really change from ft_nat to ft_set so we
++ * can do proper bit naming/setting
++ */
++#define ISAKMP_FRAG_LAST        1
++
++
+ /* descriptor for each payload type
+  *
+  * There is a slight problem in that some payloads differ, depending
+diff -Naur openswan-2.6.32-rhel-orig/include/pluto_constants.h openswan-2.6.32/include/pluto_constants.h
+--- openswan-2.6.32-rhel-orig/include/pluto_constants.h	2013-04-03 15:32:14.621705999 -0400
++++ openswan-2.6.32/include/pluto_constants.h	2013-04-03 16:03:23.762714187 -0400
+@@ -1,6 +1,7 @@
+ /* manifest constants
+  * Copyright (C) 1997 Angelos D. Keromytis.
+  * Copyright (C) 1998-2002  D. Hugh Redelmeier.
++ * Copyright (C) 2013 Paul Wouters <paul@libreswan.org>
+  *
+  * This program is free software; you can redistribute it and/or modify it
+  * under the terms of the GNU General Public License as published by the
+@@ -159,6 +160,8 @@
+ #define MAX_INPUT_UDP_SIZE             65536
+ #define MAX_OUTPUT_UDP_SIZE            65536
+ 
++#define MAX_IKE_FRAGMENTS       16
++
+ /* debugging settings: a set of selections for reporting
+  * These would be more naturally situated in log.h,
+  * but they are shared with whack.
+@@ -409,6 +412,12 @@
+ 	fo_insist  = 3   /* propose, and only accept if peer agrees */
+ };
+ 
++enum ynf_options {
++        ynf_no   = 0,
++        ynf_yes  = 1,
++        ynf_force = 2,
++};
++
+ enum saref_tracking {
+ 	sat_yes = 0, /* SAref tracking via _updown - the default */
+ 	sat_no = 1, /* no SAref tracking - third party will handle this */
+@@ -499,11 +508,10 @@
+ 
+ 	POLICY_MODECFGDNS1  = LELEM(27),   /* should we offer a DNS server IP */
+ 	POLICY_MODECFGDNS2  = LELEM(28),   /* should we offer another DNS server IP */
+-	POLICY_MODECFGWINS1 = LELEM(29),   /* should we offer a WINS server IP */
+-	POLICY_MODECFGWINS2 = LELEM(30),   /* should we offer another WINS server IP */
+-
+-	POLICY_SAREF_TRACK    = LELEM(31), /* Saref tracking via _updown */
+-	POLICY_SAREF_TRACK_CONNTRACK    = LELEM(32), /* use conntrack optimization */
++	POLICY_SAREF_TRACK    = LELEM(29), /* Saref tracking via _updown */
++	POLICY_IKE_FRAG_ALLOW = LELEM(30),
++	POLICY_IKE_FRAG_FORCE = LELEM(31),
++	POLICY_IKE_FRAG_MASK = POLICY_IKE_FRAG_ALLOW|POLICY_IKE_FRAG_FORCE,
+ };
+ 
+ /* Any IPsec policy?  If not, a connection description
+diff -Naur openswan-2.6.32-rhel-orig/lib/libipsecconf/confread.c openswan-2.6.32/lib/libipsecconf/confread.c
+--- openswan-2.6.32-rhel-orig/lib/libipsecconf/confread.c	2013-04-03 15:32:14.622706011 -0400
++++ openswan-2.6.32/lib/libipsecconf/confread.c	2013-04-03 17:59:57.739267008 -0400
+@@ -1,6 +1,7 @@
+ /* Openswan config file parser (confread.c)
+  * Copyright (C) 2001-2002 Mathieu Lafon - Arkoon Network Security
+  * Copyright (C) 2004 Xelerance Corporation
++ * Copyright (C) 2013 Paul Wouters <paul@libreswan.org>
+  *
+  * This program is free software; you can redistribute it and/or modify it
+  * under the terms of the GNU General Public License as published by the
+@@ -90,6 +91,7 @@
+ 	cfg->conn_default.policy = POLICY_RSASIG|POLICY_TUNNEL|POLICY_ENCRYPT|POLICY_PFS;
+ 	cfg->conn_default.policy |= POLICY_IKEV2_ALLOW; /* ikev2=yes */
+ 	cfg->conn_default.policy |= POLICY_SAREF_TRACK;  /* sareftrack=yes */
++	/* cfg->conn_default.policy |= POLICY_IKE_FRAG_ALLOW; */ /* ike_frag=yes */
+ 
+ 	cfg->conn_default.options[KBF_IKELIFETIME] = OAKLEY_ISAKMP_SA_LIFETIME_DEFAULT;
+ 	cfg->conn_default.options[KBF_SALIFETIME]  = SA_LIFE_DURATION_DEFAULT;
+@@ -1081,6 +1083,24 @@
+ 	}
+     }
+ 
++    if(conn->options_set[KBF_IKE_FRAG]) {
++        switch(conn->options[KBF_IKE_FRAG]) {
++        case ynf_no:
++            /* this is the default for now */
++            conn->policy &= ~POLICY_IKE_FRAG_ALLOW;
++            conn->policy &= ~POLICY_IKE_FRAG_FORCE;
++            break;
++
++        case ynf_yes:
++            conn->policy |= POLICY_IKE_FRAG_ALLOW;
++            break;
++
++        case ynf_force:
++            conn->policy |= POLICY_IKE_FRAG_ALLOW|POLICY_IKE_FRAG_FORCE;
++            break;
++        }
++    }
++
+     if(conn->options_set[KBF_SAREFTRACK]) {
+ 	switch(conn->options[KBF_SAREFTRACK]) {
+ 	case sat_yes:
+@@ -1088,13 +1108,17 @@
+ 	    conn->policy |= POLICY_SAREF_TRACK;
+ 	    break;
+ 	    
++#if 0
+ 	case sat_conntrack:
+ 	    conn->policy |= POLICY_SAREF_TRACK|POLICY_SAREF_TRACK_CONNTRACK;
+ 	    break;
++#endif
+ 	    
+ 	case sat_no:
+ 	    conn->policy &= ~POLICY_SAREF_TRACK;
++#if 0
+ 	    conn->policy &= ~POLICY_SAREF_TRACK_CONNTRACK;
++#endif
+ 	    break;
+ 	}
+     }
+diff -Naur openswan-2.6.32-rhel-orig/lib/libipsecconf/confwrite.c openswan-2.6.32/lib/libipsecconf/confwrite.c
+--- openswan-2.6.32-rhel-orig/lib/libipsecconf/confwrite.c	2010-12-17 20:23:54.000000000 -0500
++++ openswan-2.6.32/lib/libipsecconf/confwrite.c	2013-04-03 16:12:45.970161525 -0400
+@@ -12,7 +12,7 @@
+  * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+  * for more details.
+  *
+- * RCSID $Id: confwrite.c,v 1.5 2004/12/07 00:28:18 ken Exp $
++ * Copyright (C) 2013 Paul Wouters <paul@libreswan.org>
+  */
+ 
+ #include <stdlib.h>
+@@ -457,12 +457,13 @@
+ 
+     if(conn->policy) {
+ 	int auth_policy, phase2_policy, shunt_policy, failure_policy;
+-	int ikev2_policy;
++	int ikev2_policy, ike_frag_policy;
+ 
+ 	phase2_policy = (conn->policy & (POLICY_AUTHENTICATE|POLICY_ENCRYPT));
+ 	failure_policy = (conn->policy & POLICY_FAIL_MASK);
+ 	shunt_policy=(conn->policy & POLICY_SHUNT_MASK);
+ 	ikev2_policy = conn->policy & POLICY_IKEV2_MASK;
++	ike_frag_policy = (conn->policy & POLICY_IKE_FRAG_MASK);
+ 
+ 	switch(shunt_policy) {
+ 	case POLICY_SHUNT_TRAP:
+@@ -563,6 +564,20 @@
+ 		fprintf(out, "\tikev2=insist\n");
+ 		break;
+ 	    }
++            switch(ike_frag_policy) {
++            case 0:
++                fprintf(out, "\tike_frag=never\n");
++                break;
++
++            case POLICY_IKE_FRAG_ALLOW:
++                /* it's the default, do not print anything */
++                /* fprintf(out, "\tike_frag=yes\n"); */
++                break;
++
++            case POLICY_IKE_FRAG_ALLOW|POLICY_IKE_FRAG_FORCE:
++                fprintf(out, "\tike_frag=force\n");
++                break;
++             }
+ 	    break;
+ 
+ 	case POLICY_SHUNT_PASS:
+diff -Naur openswan-2.6.32-rhel-orig/lib/libipsecconf/keywords.c openswan-2.6.32/lib/libipsecconf/keywords.c
+--- openswan-2.6.32-rhel-orig/lib/libipsecconf/keywords.c	2013-04-03 15:32:14.622706011 -0400
++++ openswan-2.6.32/lib/libipsecconf/keywords.c	2013-04-03 17:49:49.523346698 -0400
+@@ -73,6 +73,21 @@
+ struct keyword_enum_values kw_fourvalued_list=
+ { kw_fourvalued_values, sizeof(kw_fourvalued_values)/sizeof(struct keyword_enum_value)};
+ 
++
++/*
++ *  * Values for yes/no/force, used by ike_frag
++ *   */
++struct keyword_enum_value kw_ynf_values[]={
++    { "never",     ynf_no},
++    { "no",        ynf_no},
++    { "yes",       ynf_yes},
++    { "insist",     ynf_force},
++    { "force",     ynf_force},
++};
++
++struct keyword_enum_values kw_ynf_list=
++{ kw_ynf_values, sizeof(kw_ynf_values)/sizeof(struct keyword_enum_value)};
++
+ /*
+  * Values for authby={rsasig, secret}
+  */
+@@ -182,7 +197,7 @@
+ struct keyword_enum_value kw_sareftrack_values[]={
+     { "yes",          sat_yes },
+     { "no",           sat_no },
+-    { "conntrack",    sat_conntrack },
++    /* { "conntrack",    sat_conntrack }, */
+ };
+ 
+ struct keyword_enum_values kw_sareftrack_list=
+@@ -405,6 +420,7 @@
+     {"keyexchange",    kv_conn|kv_auto, kt_enum,   KBF_KEYEXCHANGE, &kw_keyexchange_list},
+     {"ikev2",          kv_conn|kv_auto|kv_processed,kt_enum,KBF_IKEv2,&kw_fourvalued_list},
+     {"sareftrack",     kv_conn|kv_auto|kv_processed,kt_enum,KBF_SAREFTRACK,&kw_sareftrack_list},
++    {"ike_frag",       kv_conn|kv_auto|kv_processed,kt_enum,KBF_IKE_FRAG,&kw_ynf_list},
+     {"pfs",            kv_conn|kv_auto, kt_bool,   KBF_PFS,          NOT_ENUM},
+     {"sha2_truncbug",  kv_conn|kv_auto, kt_enum,   KBF_SHA2_TRUNCBUG,          &kw_sha2_truncbug},
+     {"keylife",        kv_conn|kv_auto|kv_alias, kt_time,   KBF_SALIFETIME,NOT_ENUM},
+@@ -468,8 +484,8 @@
+     {"modecfgpull", kv_conn|kv_auto, kt_invertbool, KBF_MODECONFIGPULL , NOT_ENUM},
+     {"modecfgdns1", kv_conn|kv_auto|kv_leftright, kt_ipaddr, KSCF_MODECFGDNS1,NOT_ENUM},
+     {"modecfgdns2", kv_conn|kv_auto|kv_leftright, kt_ipaddr, KSCF_MODECFGDNS2,NOT_ENUM},
+-    {"modecfgwins1", kv_conn|kv_auto|kv_leftright, kt_ipaddr, KSCF_MODECFGWINS1,NOT_ENUM},
+-    {"modecfgwins2", kv_conn|kv_auto|kv_leftright, kt_ipaddr, KSCF_MODECFGWINS2,NOT_ENUM},
++    {"modecfgwins1", kv_conn|kv_auto|kv_leftright, kt_obsolete, KBF_WARNIGNORE,NOT_ENUM},
++    {"modecfgwins2", kv_conn|kv_auto|kv_leftright, kt_obsolete, KBF_WARNIGNORE,NOT_ENUM},
+     /* things for manual keying only */
+ #ifdef USE_MANUAL_KEYING
+     {"spi",            kv_conn|kv_leftright|kv_manual, kt_number, KNCF_SPI,NOT_ENUM},
+diff -Naur openswan-2.6.32-rhel-orig/lib/libopenswan/constants.c openswan-2.6.32/lib/libopenswan/constants.c
+--- openswan-2.6.32-rhel-orig/lib/libopenswan/constants.c	2013-04-03 15:32:14.635706165 -0400
++++ openswan-2.6.32/lib/libopenswan/constants.c	2013-04-03 16:15:41.709180461 -0400
+@@ -180,11 +180,12 @@
+ const char *const payload_name_nat_d[] = {
+     "ISAKMP_NEXT_NAT-D",
+     "ISAKMP_NEXT_NAT-OA",
++    "ISAKMP_NEXT_IKE_FRAGMENTATION",
+     NULL
+ };
+ 
+ static enum_names payload_names_nat_d =
+-{ ISAKMP_NEXT_NATD_DRAFTS, ISAKMP_NEXT_NATOA_DRAFTS, payload_name_nat_d, NULL };
++{ ISAKMP_NEXT_NATD_DRAFTS, ISAKMP_NEXT_IKE_FRAGMENTATION, payload_name_nat_d, NULL };
+ static enum_names payload_names_ikev2_d =
+ { ISAKMP_NEXT_v2SA, ISAKMP_NEXT_v2EAP, payload_names_ikev2, &payload_names_nat_d };
+ 
+diff -Naur openswan-2.6.32-rhel-orig/lib/libpluto/packet.c openswan-2.6.32/lib/libpluto/packet.c
+--- openswan-2.6.32-rhel-orig/lib/libpluto/packet.c	2013-04-03 15:32:14.639706212 -0400
++++ openswan-2.6.32/lib/libpluto/packet.c	2013-04-03 16:18:13.844929423 -0400
+@@ -1,6 +1,9 @@
+ /* parsing packets: formats and tools
+  * Copyright (C) 1997 Angelos D. Keromytis.
+  * Copyright (C) 1998-2001  D. Hugh Redelmeier.
++ * Copyright (C) 1998-2001,2013  D. Hugh Redelmeier.
++ * Copyright (C) 2012-2013 Paul Wouters <paul@libreswan.org>
++ * Copyright (C) 2013 Wolfgang Nothdurft <wolfgang@linogate.de>
+  *
+  * This program is free software; you can redistribute it and/or modify it
+  * under the terms of the GNU General Public License as published by the
+@@ -604,6 +607,32 @@
+ 
+ struct_desc isakmp_nat_oa = { "ISAKMP NAT-OA Payload", isanat_oa_fields, sizeof(struct isakmp_nat_oa) };
+ 
++/* ISAKMP IKE Fragmentation Payload
++ * Cisco proprietary, undocumented
++ *
++ *  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++ * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
++ * ! Next Payload  !   RESERVED    !         Payload Length        !
++ * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
++ * !          Fragment ID          !  Frag Number  !     Flags     !
++ * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
++ * !                                                               !
++ * ~                         Fragment Data                         ~
++ * !                                                               !
++ * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
++ */
++static field_desc isafrag_fields[] = {
++        { ft_mbz, 8/BITS_PER_BYTE, "next payload type", NULL },
++        { ft_mbz, 8/BITS_PER_BYTE, "reserved", NULL },
++        { ft_len, 16/BITS_PER_BYTE, "length", NULL },
++        { ft_nat, 16/BITS_PER_BYTE, "fragment id", NULL },
++        { ft_nat, 8/BITS_PER_BYTE, "fragment number", NULL },
++        { ft_nat, 8/BITS_PER_BYTE, "flags", NULL }, /* 0x1 means last fragment */
++        { ft_end, 0, NULL, NULL }
++};
++
++struct_desc isakmp_ikefrag_desc = { "ISAKMP IKE Fragment Payload", isafrag_fields, sizeof(struct isakmp_ikefrag) };
++
+ /*
+  * GENERIC IKEv2 header.
+  * Note differs from IKEv1, in that it has a critical bit
+diff -Naur openswan-2.6.32-rhel-orig/lib/libpluto/pluto_constants.c openswan-2.6.32/lib/libpluto/pluto_constants.c
+--- openswan-2.6.32-rhel-orig/lib/libpluto/pluto_constants.c	2013-04-03 15:32:14.594705679 -0400
++++ openswan-2.6.32/lib/libpluto/pluto_constants.c	2013-04-03 16:18:50.364349418 -0400
+@@ -297,10 +297,9 @@
+ 	"IKEv2Init",
+ 	"ModeCFGDNS1",
+ 	"ModeCFGDNS2",
+-	"ModeCFGWINS1",
+-	"ModeCFGWINS2",
+ 	"SAREFTRACK",
+-	"SAREFCONNTRACK",
++	"IKE_FRAG",
++	"IKE_FRAG_FORCE",
+ 	NULL
+     };
+ 
+diff -Naur openswan-2.6.32-rhel-orig/programs/_confread/d.ipsec.conf/modecfgoptions.xml openswan-2.6.32/programs/_confread/d.ipsec.conf/modecfgoptions.xml
+--- openswan-2.6.32-rhel-orig/programs/_confread/d.ipsec.conf/modecfgoptions.xml	2010-12-17 20:23:54.000000000 -0500
++++ openswan-2.6.32/programs/_confread/d.ipsec.conf/modecfgoptions.xml	2013-04-03 17:40:48.097178442 -0400
+@@ -1,10 +1,8 @@
+   <varlistentry>
+   <term><emphasis remap='B'>modecfgdns1</emphasis></term>
+   <term><emphasis remap='B'>modecfgdns2</emphasis></term>
+-  <term><emphasis remap='B'>modecfgwins1</emphasis></term>
+-  <term><emphasis remap='B'>modecfgwins2</emphasis></term>
+   <listitem>
+-<para>Specify the IP address for DNS or WINS servers for the client to use.
++<para>Specify the IP address for DNS servers for the client to use.
+ </para>
+   </listitem>
+   </varlistentry>
+diff -Naur openswan-2.6.32-rhel-orig/programs/_confread/d.ipsec.conf/sareftrack.xml openswan-2.6.32/programs/_confread/d.ipsec.conf/sareftrack.xml
+--- openswan-2.6.32-rhel-orig/programs/_confread/d.ipsec.conf/sareftrack.xml	2010-12-17 20:23:54.000000000 -0500
++++ openswan-2.6.32/programs/_confread/d.ipsec.conf/sareftrack.xml	2013-04-03 17:55:33.685271706 -0400
+@@ -4,14 +4,11 @@
+ <para>Set the method of tracking reply packets with SArefs when using an
+ SAref compatible stack. Currently only the <emphasis remap='I'>mast</emphasis>
+ stack supports this.  Acceptable values are <emphasis remap='B'>yes</emphasis>
+-(the default), <emphasis remap='B'>no</emphasis> or <emphasis remap='B'>conntrack</emphasis>. This option is ignored when SArefs are not supported. This option
++(the default), <emphasis remap='B'>no</emphasis>. This option is ignored when SArefs are not supported. This option
+ is passed as PLUTO_SAREF_TRACKING to the <emphasis remap='I'>updown</emphasis>
+ script which makes the actual decisions whether to perform any iptables/ip_conntrack
+ manipulation. A value of yes means that an IPSEC mangle table will be created. This table
+-will be used to match reply packets. A value of conntrack means that
+-additionally, subsequent packets using this connection will be marked as
+-well, reducing the lookups needed to find the proper SAref by using the
+-ip_conntrack state. A value of no means no IPSEC mangle table is created,
++will be used to match reply packets. A value of no means no IPSEC mangle table is created,
+ and SAref tracking is left to a third-party (kernel) module. In case of a third
+ party module, the SArefs can be relayed using the HAVE_STATSD deamon.
+ </para>
+diff -Naur openswan-2.6.32-rhel-orig/programs/_confread/ipsec.conf.5 openswan-2.6.32/programs/_confread/ipsec.conf.5
+--- openswan-2.6.32-rhel-orig/programs/_confread/ipsec.conf.5	2010-12-17 20:23:54.000000000 -0500
++++ openswan-2.6.32/programs/_confread/ipsec.conf.5	2013-04-03 17:57:31.236613002 -0400
+@@ -1,13 +1,22 @@
+ '\" t
+ .\"     Title: IPSEC.CONF
+ .\"    Author: [FIXME: author] [see http://docbook.sf.net/el/author]
+-.\" Generator: DocBook XSL Stylesheets v1.75.2 <http://docbook.sf.net/>
+-.\"      Date: 10/06/2010
++.\" Generator: DocBook XSL Stylesheets v1.77.1 <http://docbook.sf.net/>
++.\"      Date: 04/03/2013
+ .\"    Manual: [FIXME: manual]
+ .\"    Source: [FIXME: source]
+ .\"  Language: English
+ .\"
+-.TH "IPSEC\&.CONF" "5" "10/06/2010" "[FIXME: source]" "[FIXME: manual]"
++.TH "IPSEC\&.CONF" "5" "04/03/2013" "[FIXME: source]" "[FIXME: manual]"
++.\" -----------------------------------------------------------------
++.\" * Define some portability stuff
++.\" -----------------------------------------------------------------
++.\" ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
++.\" http://bugs.debian.org/507673
++.\" http://lists.gnu.org/archive/html/groff/2009-02/msg00013.html
++.\" ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
++.ie \n(.g .ds Aq \(aq
++.el       .ds Aq '
+ .\" -----------------------------------------------------------------
+ .\" * set default formatting
+ .\" -----------------------------------------------------------------
+@@ -80,7 +89,7 @@
+ \fIvalue\fR
+ cannot itself contain a double quote, nor may it be continued across more than one line\&.
+ .PP
+-Numeric values are specified to be either an \(lqinteger\(rq (a sequence of digits) or a \(lqdecimal number\(rq (sequence of digits optionally followed by `\&.\' and another sequence of digits)\&.
++Numeric values are specified to be either an \(lqinteger\(rq (a sequence of digits) or a \(lqdecimal number\(rq (sequence of digits optionally followed by `\&.\*(Aq and another sequence of digits)\&.
+ .PP
+ There is currently one parameter which is available in any type of section:
+ .PP
+@@ -101,7 +110,7 @@
+ \fBconn\fR
+ section\&. It acts like an
+ \fBalso\fR
+-that flips the referenced section\'s entries left\-for\-right\&.
++that flips the referenced section\*(Aqs entries left\-for\-right\&.
+ .RE
+ .PP
+ Parameter names beginning with
+@@ -141,7 +150,7 @@
+ \fIconnection specification\fR, defining a network connection to be made using IPsec\&. The name given is arbitrary, and is used to identify the connection to
+ \fBipsec_auto\fR(8)
+ and
+-\fBipsec_manual\fR(8)\&. Here\'s a simple example:
++\fBipsec_manual\fR(8)\&. Here\*(Aqs a simple example:
+ .sp
+ .if n \{\
+ .RS 4
+@@ -221,12 +230,12 @@
+ .PP
+ \fBleft\fR
+ .RS 4
+-(required) the IP address of the left participant\'s public\-network interface, in any form accepted by
++(required) the IP address of the left participant\*(Aqs public\-network interface, in any form accepted by
+ \fBipsec_ttoaddr\fR(3)\&. Currently, IPv4 and IPv6 IP addresses are supported\&. There are several magic values\&. If it is
+ \fB%defaultroute\fR, and the
+ \fBconfig\fR
+ \fBsetup\fR
+-section\'s,
++section\*(Aqs,
+ \fBinterfaces\fR
+ specification contains
+ \fB%defaultroute,\fR
+@@ -246,7 +255,7 @@
+ and
+ \fBleftnexthop\fR
+ are to be filled in (by automatic keying) from DNS data for
+-\fBleft\fR\'s client\&. The value can also contain the interface name, which will then later be used to obtain the IP address from to fill in\&. For example
++\fBleft\fR\*(Aqs client\&. The value can also contain the interface name, which will then later be used to obtain the IP address from to fill in\&. For example
+ \fB%ppp0\fR
+ The values
+ \fB%group\fR
+@@ -254,8 +263,8 @@
+ \fB%opportunisticgroup\fR
+ makes this a policy group conn: one that will be instantiated into a regular or opportunistic conn for each CIDR block listed in the policy group file with the same name as the conn\&.
+ .sp
+-If using IP addresses in combination with NAT, always use the actual local machine\'s (NAT\'ed) IP address, and if the remote (eg right=) is NAT\'ed as well, the remote\'s public (\fBnot\fR
+-NAT\'ed) IP address\&. Note that this makes the configuration no longer symmetrical on both sides, so you cannot use an identical configuration file on both hosts\&.
++If using IP addresses in combination with NAT, always use the actual local machine\*(Aqs (NAT\*(Aqed) IP address, and if the remote (eg right=) is NAT\*(Aqed as well, the remote\*(Aqs public (\fBnot\fR
++NAT\*(Aqed) IP address\&. Note that this makes the configuration no longer symmetrical on both sides, so you cannot use an identical configuration file on both hosts\&.
+ .RE
+ .PP
+ \fBleftsubnet\fR
+@@ -306,7 +315,7 @@
+ .PP
+ \fBleftnexthop\fR
+ .RS 4
+-next\-hop gateway IP address for the left participant\'s connection to the public network; defaults to
++next\-hop gateway IP address for the left participant\*(Aqs connection to the public network; defaults to
+ \fB%direct\fR
+ (meaning
+ \fIright\fR)\&. If the value is to be overridden by the
+@@ -323,7 +332,7 @@
+ \fBsetup\fR
+ section, the next\-hop gateway address of the default\-route interface will be used\&. The magic value
+ \fB%direct\fR
+-signifies a value to be filled in (by automatic keying) with the peer\'s address\&. Relevant only locally, other end need not agree on it\&.
++signifies a value to be filled in (by automatic keying) with the peer\*(Aqs address\&. Relevant only locally, other end need not agree on it\&.
+ .RE
+ .PP
+ \fBleftsourceip\fR
+@@ -424,7 +433,7 @@
+ \fBike=3des\-md5;modp1024,aes\-sha1;modp1536\fR
+ or
+ \fBike=modp1536\fR\&. The options must be suitable as a value of
+-\fBipsec_spi\fR(8)\'s
++\fBipsec_spi\fR(8)\*(Aqs
+ \fB\-\-ike\fR
+ option\&. The default is to use IKE, and to allow all combinations of:
+ .sp
+@@ -459,7 +468,7 @@
+ .PP
+ \fBphase2alg\fR
+ .RS 4
+-Specifies the algorithms that will be offered/accepted for a phase2 negotiation\&. If not specified, a secure set of defaults will be used\&. Sets are separated using comma\'s\&.
++Specifies the algorithms that will be offered/accepted for a phase2 negotiation\&. If not specified, a secure set of defaults will be used\&. Sets are separated using comma\*(Aqs\&.
+ .sp
+ The default values are the same as for ike= Note also that not all ciphers available to the kernel (eg through CryptoAPI) are necessarilly supported here\&.
+ .sp
+@@ -472,6 +481,13 @@
+ A special case is AES CCM, which uses the syntax of "phase2alg=aes_ccm_a\-152\-null"
+ .RE
+ .PP
++\fBsha2_truncbug\fR
++.RS 4
++The default hash truncation for sha2_256 is 128 bits\&. Linux implemented the draft version which stated 96 bits\&. This option enables using the bad 96 bits version to interop with older linux kernels (unpatched version 2\&.6\&.33 and older) and openswan versions before 2\&.6\&.38\&. Currently the accepted values are
++\fBno\fR, (the default) signifying default IETF truncation of 128 bits, or
++\fByes\fR, signifying 96 bits broken Linux kernel style truncation\&.
++.RE
++.PP
+ \fBesp\fR
+ .RS 4
+ This option is obsolete\&. Please use
+@@ -484,7 +500,7 @@
+ AH authentication algorithm to be used for the connection, e\&.g here\&.
+ \fBhmac\-md5\fR
+ The options must be suitable as a value of
+-\fBipsec_spi\fR(8)\'s
++\fBipsec_spi\fR(8)\*(Aqs
+ \fB\-\-ah\fR
+ option\&. The default is not to use AH\&. If for some (invalid) reason you still think you need AH, please use esp with the null encryption cipher instead\&. Note also that not all ciphers available to the kernel (eg through CryptoAPI) are necessarilly supported here\&.
+ .RE
+@@ -517,11 +533,9 @@
+ stack supports this\&. Acceptable values are
+ \fByes\fR
+ (the default),
+-\fBno\fR
+-or
+-\fBconntrack\fR\&. This option is ignored when SArefs are not supported\&. This option is passed as PLUTO_SAREF_TRACKING to the
++\fBno\fR\&. This option is ignored when SArefs are not supported\&. This option is passed as PLUTO_SAREF_TRACKING to the
+ \fIupdown\fR
+-script which makes the actual decisions whether to perform any iptables/ip_conntrack manipulation\&. A value of yes means that an IPSEC mangle table will be created\&. This table will be used to match reply packets\&. A value of conntrack means that additionally, subsequent packets using this connection will be marked as well, reducing the lookups needed to find the proper SAref by using the ip_conntrack state\&. A value of no means no IPSEC mangle table is created, and SAref tracking is left to a third\-party (kernel) module\&. In case of a third party module, the SArefs can be relayed using the HAVE_STATSD deamon\&.
++script which makes the actual decisions whether to perform any iptables/ip_conntrack manipulation\&. A value of yes means that an IPSEC mangle table will be created\&. This table will be used to match reply packets\&. A value of no means no IPSEC mangle table is created, and SAref tracking is left to a third\-party (kernel) module\&. In case of a third party module, the SArefs can be relayed using the HAVE_STATSD deamon\&.
+ .RE
+ .PP
+ \fBleftid\fR
+@@ -543,12 +557,12 @@
+ or by
+ \fBipsec_whack\fR(8)), or, if not set, it is the IP address in
+ \fB%defaultroute\fR
+-(if that is supported by a TXT record in its reverse domain), or otherwise it is the system\'s hostname (if that is supported by a TXT record in its forward domain), or otherwise it is undefined\&.
++(if that is supported by a TXT record in its reverse domain), or otherwise it is the system\*(Aqs hostname (if that is supported by a TXT record in its forward domain), or otherwise it is undefined\&.
+ .RE
+ .PP
+ \fBleftrsasigkey\fR
+ .RS 4
+-the left participant\'s public key for RSA signature authentication, in RFC 2537 format using
++the left participant\*(Aqs public key for RSA signature authentication, in RFC 2537 format using
+ \fBipsec_ttodata\fR(3)
+ encoding\&. The magic value
+ \fB%none\fR
+@@ -613,7 +627,7 @@
+ \fBno|never\fR
+ (signifying that we will never send a X\&.509 certificate)\&. The default for this option is
+ \fBifasked\fR
+-which may break compatibility with other vendor\'s IPSec implementations, such as Cisco and SafeNet\&. If you find that you are getting errors about no ID/Key found, you likely need to set this to
++which may break compatibility with other vendor\*(Aqs IPSec implementations, such as Cisco and SafeNet\&. If you find that you are getting errors about no ID/Key found, you likely need to set this to
+ \fBalways\fR\&. This per\-conn option replaces the obsolete global
+ \fBnocrsend\fR
+ option\&.
+@@ -682,9 +696,9 @@
+ (the default)\&.
+ .RE
+ .PP
+-\fBmodecfgdns1\fR, \fBmodecfgdns2\fR, \fBmodecfgwins1\fR, \fBmodecfgwins2\fR
++\fBmodecfgdns1\fR, \fBmodecfgdns2\fR
+ .RS 4
+-Specify the IP address for DNS or WINS servers for the client to use\&.
++Specify the IP address for DNS servers for the client to use\&.
+ .RE
+ .PP
+ \fBremote_peer_type\fR
+@@ -755,7 +769,7 @@
+ \fBrestart_by_peer\fR
+ means that
+ \fIALL\fR
+-SA\'s to the dead peer will renegotiated\&.
++SA\*(Aqs to the dead peer will renegotiated\&.
+ .sp
+ \fIdpdaction=clear\fR
+ is really only useful on the server of a Road Warrior config\&.
+@@ -763,7 +777,7 @@
+ .PP
+ \fBpfs\fR
+ .RS 4
+-whether Perfect Forward Secrecy of keys is desired on the connection\'s keying channel (with PFS, penetration of the key\-exchange protocol does not compromise keys negotiated earlier); Since there is no reason to ever refuse PFS, Openswan will allow a connection defined with
++whether Perfect Forward Secrecy of keys is desired on the connection\*(Aqs keying channel (with PFS, penetration of the key\-exchange protocol does not compromise keys negotiated earlier); Since there is no reason to ever refuse PFS, Openswan will allow a connection defined with
+ \fBpfs=no\fR
+ to use PFS anyway\&. Acceptable values are
+ \fByes\fR
+@@ -834,7 +848,7 @@
+ .RS 4
+ maximum percentage by which
+ \fBrekeymargin\fR
+-should be randomly increased to randomize rekeying intervals (important for hosts with many connections); acceptable values are an integer, which may exceed 100, followed by a `%\' (default set by
++should be randomly increased to randomize rekeying intervals (important for hosts with many connections); acceptable values are an integer, which may exceed 100, followed by a `%\*(Aq (default set by
+ \fBipsec_pluto\fR(8), currently
+ \fB100%\fR)\&. The value of
+ \fBrekeymargin\fR, after this random increase, must not exceed
+@@ -887,7 +901,7 @@
+ .PP
+ \fBdisablearrivalcheck\fR
+ .RS 4
+-whether KLIPS\'s normal tunnel\-exit check (that a packet emerging from a tunnel has plausible addresses in its header) should be disabled; acceptable values are
++whether KLIPS\*(Aqs normal tunnel\-exit check (that a packet emerging from a tunnel has plausible addresses in its header) should be disabled; acceptable values are
+ \fByes\fR
+ and
+ \fBno\fR
+@@ -922,7 +936,7 @@
+ \fBconfig\fR
+ section known to the IPsec software is the one named
+ \fBsetup\fR, which contains information used when the software is being started (see
+-\fBipsec_setup\fR(8))\&. Here\'s an example:
++\fBipsec_setup\fR(8))\&. Here\*(Aqs an example:
+ .sp
+ .if n \{\
+ .RS 4
+@@ -960,7 +974,7 @@
+ \fB%myid\fR
+ is set to the IP address in
+ \fB%defaultroute\fR
+-(if that is supported by a TXT record in its reverse domain), or otherwise the system\'s hostname (if that is supported by a TXT record in its forward domain), or otherwise it is undefined\&. An explicit value generally starts with ``\fB@\fR\'\'\&.
++(if that is supported by a TXT record in its reverse domain), or otherwise the system\*(Aqs hostname (if that is supported by a TXT record in its forward domain), or otherwise it is undefined\&. An explicit value generally starts with ``\fB@\fR\*(Aq\*(Aq\&.
+ .RE
+ .PP
+ \fBprotostack\fR
+@@ -976,7 +990,7 @@
+ \fB%none\fR\&. One of the pairs may be written as
+ \fB%defaultroute\fR, which means: find the interface
+ \fId\fR
+-that the default route points to, and then act as if the value was ``\fBipsec0=\fR\fId\fR\'\'\&.
++that the default route points to, and then act as if the value was ``\fBipsec0=\fR\fId\fR\*(Aq\*(Aq\&.
+ \fB%defaultroute\fR
+ is the default;
+ \fB%none\fR
+@@ -1041,7 +1055,7 @@
+ .PP
+ \fBoe\fR
+ .RS 4
+-a boolean (yes/no) that determines if Opportunistic Encryption will be enabled\&. Opportunistic Encryption is the term to describe using IPsec tunnels without prearrangement\&. It uses IPSECKEY or TXT records to announce public RSA keys for certain IP\'s or identities\&.
++a boolean (yes/no) that determines if Opportunistic Encryption will be enabled\&. Opportunistic Encryption is the term to describe using IPsec tunnels without prearrangement\&. It uses IPSECKEY or TXT records to announce public RSA keys for certain IP\*(Aqs or identities\&.
+ .sp
+ For a complete description see /doc/draft\-richardson\-ipsec\-opportunistic\&.txt, doc/opportunism\-spec\&.txt and doc/opportunism\&.howto\&. See also the IETF BTNS working group and RFC4025\&.
+ .sp
+@@ -1058,18 +1072,18 @@
+ \fI(n\-1)\fR
+ of them, where
+ \fIn\fR
+-is the number of CPU\'s you have (including hypherthreaded CPU\'s)\&. A value of 0 forces pluto to do all operations in the main process\&. A value of \-1 tells pluto to perform the above calculation\&. Any other value forces the number to that amount\&.
++is the number of CPU\*(Aqs you have (including hypherthreaded CPU\*(Aqs)\&. A value of 0 forces pluto to do all operations in the main process\&. A value of \-1 tells pluto to perform the above calculation\&. Any other value forces the number to that amount\&.
+ .RE
+ .PP
+ \fBcrlcheckinterval\fR
+ .RS 4
+-interval, specified in seconds, after which pluto will verify loaded X\&.509 CRL\'s for expiration\&. If any of the CRL\'s is expired, or if they previously failed to get updated, a new attempt at updating the CRL is made\&. The first attempt to update a CRL is started at two times the crlcheckinterval\&. If set to
++interval, specified in seconds, after which pluto will verify loaded X\&.509 CRL\*(Aqs for expiration\&. If any of the CRL\*(Aqs is expired, or if they previously failed to get updated, a new attempt at updating the CRL is made\&. The first attempt to update a CRL is started at two times the crlcheckinterval\&. If set to
+ \fB0\fR, which is also the default value if this option is not specified, CRL updating is disabled\&.
+ .RE
+ .PP
+ \fBstrictcrlpolicy\fR
+ .RS 4
+-if not set, pluto is tolerant about missing or expired X\&.509 Certificate Revocation Lists (CRL\'s), and will allow peer certificates as long as they do not appear on an expired CRL\&. When this option is enabled, all connections with an expired or missing CRL will be denied\&. Active connections will be terminated at rekey time\&. This setup is more secure, but also dangerous\&. If the CRL is fetched through an IPsec tunnel with a CRL that expired, the entire VPN server will be dead in the water until a new CRL is manually transferred to the machine (if it allows non\-IPsec connections)\&. Acceptable values are
++if not set, pluto is tolerant about missing or expired X\&.509 Certificate Revocation Lists (CRL\*(Aqs), and will allow peer certificates as long as they do not appear on an expired CRL\&. When this option is enabled, all connections with an expired or missing CRL will be denied\&. Active connections will be terminated at rekey time\&. This setup is more secure, but also dangerous\&. If the CRL is fetched through an IPsec tunnel with a CRL that expired, the entire VPN server will be dead in the water until a new CRL is manually transferred to the machine (if it allows non\-IPsec connections)\&. Acceptable values are
+ \fByes\fR
+ or
+ \fBno\fR
+@@ -1172,7 +1186,7 @@
+ .RS 4
+ shell command to run before starting Pluto (e\&.g\&., to decrypt an encrypted copy of the
+ \fIipsec\&.secrets\fR
+-file)\&. It\'s run in a very simple way; complexities like I/O redirection are best hidden within a script\&. Any output is redirected for logging, so running interactive commands is difficult unless they use
++file)\&. It\*(Aqs run in a very simple way; complexities like I/O redirection are best hidden within a script\&. Any output is redirected for logging, so running interactive commands is difficult unless they use
+ /dev/tty
+ or equivalent for their interaction\&. Default is none\&.
+ .RE
+@@ -1181,7 +1195,7 @@
+ .RS 4
+ shell command to run after starting Pluto (e\&.g\&., to remove a decrypted copy of the
+ \fIipsec\&.secrets\fR
+-file)\&. It\'s run in a very simple way; complexities like I/O redirection are best hidden within a script\&. Any output is redirected for logging, so running interactive commands is difficult unless they use
++file)\&. It\*(Aqs run in a very simple way; complexities like I/O redirection are best hidden within a script\&. Any output is redirected for logging, so running interactive commands is difficult unless they use
+ /dev/tty
+ or equivalent for their interaction\&. Default is none\&.
+ .RE
+@@ -1195,7 +1209,7 @@
+ .PP
+ \fBfragicmp\fR
+ .RS 4
+-whether a tunnel\'s need to fragment a packet should be reported back with an ICMP message, in an attempt to make the sender lower his PMTU estimate; acceptable values are
++whether a tunnel\*(Aqs need to fragment a packet should be reported back with an ICMP message, in an attempt to make the sender lower his PMTU estimate; acceptable values are
+ \fByes\fR
+ (the default) and
+ \fBno\fR\&. This KLIPS option has no effect on NETKEY, Windows or BSD stacks\&.
+@@ -1203,7 +1217,7 @@
+ .PP
+ \fBhidetos\fR
+ .RS 4
+-whether a tunnel packet\'s TOS field should be set to
++whether a tunnel packet\*(Aqs TOS field should be set to
+ 0
+ rather than copied from the user packet inside; acceptable values are
+ \fByes\fR
+@@ -1214,7 +1228,7 @@
+ \fBoverridemtu\fR
+ .RS 4
+ value that the MTU of the ipsec\fIn\fR
+-interface(s) should be set to, overriding IPsec\'s (large) default\&. This parameter is needed only in special situations\&. This KLIPS option has no effect on NETKEY, Windows or BSD stacks\&.
++interface(s) should be set to, overriding IPsec\*(Aqs (large) default\&. This parameter is needed only in special situations\&. This KLIPS option has no effect on NETKEY, Windows or BSD stacks\&.
+ .RE
+ .SH "IMPLICIT CONNS"
+ .PP
+@@ -1346,7 +1360,7 @@
+ .PP
+ \ \&\ \&\ \&\ \&\ \&\fBipsec auto \-\-rereadgroups\fR
+ .PP
+-or at system start, the connection is instantiated such that each CIDR block serves as an instance\'s
++or at system start, the connection is instantiated such that each CIDR block serves as an instance\*(Aqs
+ \fBright\fR
+ value\&. The system treats the resulting instances as normal connections\&.
+ .PP
+@@ -1375,9 +1389,9 @@
+ .PP
+ When choosing a connection to apply to an outbound packet caught with a
+ \fB%trap,\fR
+-the system prefers the one with the most specific eroute that includes the packet\'s source and destination IP addresses\&. Source subnets are examined before destination subnets\&. For initiating, only routed connections are considered\&. For responding, unrouted but added connections are considered\&.
++the system prefers the one with the most specific eroute that includes the packet\*(Aqs source and destination IP addresses\&. Source subnets are examined before destination subnets\&. For initiating, only routed connections are considered\&. For responding, unrouted but added connections are considered\&.
+ .PP
+-When choosing a connection to use to respond to a negotiation which doesn\'t match an ordinary conn, an opportunistic connection may be instantiated\&. Eventually, its instance will be /32 \-> /32, but for earlier stages of the negotiation, there will not be enough information about the client subnets to complete the instantiation\&.
++When choosing a connection to use to respond to a negotiation which doesn\*(Aqt match an ordinary conn, an opportunistic connection may be instantiated\&. Eventually, its instance will be /32 \-> /32, but for earlier stages of the negotiation, there will not be enough information about the client subnets to complete the instantiation\&.
+ .SH "FILES"
+ .sp
+ .if n \{\
+@@ -1427,7 +1441,7 @@
+ \fB%any\fR
+ with the
+ \fIprotoport=\fR
+-option is ambiguous\&. Should the SA permits any port through or should the SA negotiate any single port through? The first is a basic conn with a wildcard\&. The second is a template\&. The second is the current behaviour, and it\'s wrong for quite a number of uses involving TCP\&. The keyword
++option is ambiguous\&. Should the SA permits any port through or should the SA negotiate any single port through? The first is a basic conn with a wildcard\&. The second is a template\&. The second is the current behaviour, and it\*(Aqs wrong for quite a number of uses involving TCP\&. The keyword
+ \fB%one\fR
+ may be introduced in the future to separate these two cases\&.
+ .PP
+@@ -1452,7 +1466,7 @@
+ Multiple L2TP clients behind the same NAT router, and multiple L2TP clients behind different NAT routers using the same Virtual IP is currently only working for the KLIPSNG stack\&.
+ .PP
+ The ability to specify different identities,
+-\fBauthby\fR, and public keys for different automatic\-keyed connections between the same participants is misleading; this doesn\'t work dependably because the identity of the participants is not known early enough\&. This is especially awkward for the \(lqRoad Warrior\(rq case, where the remote IP address is specified as
++\fBauthby\fR, and public keys for different automatic\-keyed connections between the same participants is misleading; this doesn\*(Aqt work dependably because the identity of the participants is not known early enough\&. This is especially awkward for the \(lqRoad Warrior\(rq case, where the remote IP address is specified as
+ 0\&.0\&.0\&.0, and that is considered to be the \(lqparticipant\(rq for such connections\&.
+ .PP
+ In principle it might be necessary to control MTU on an interface\-by\-interface basis, rather than with the single global override that
+@@ -1469,7 +1483,7 @@
+ \fBleftrsasigkey=%dnsonload\fR
+ will fail\&.
+ \fBipsec_pluto\fR(8)
+-does not actually use the public key for our side of a conn but it isn\'t generally known at a add\-time which side is ours (Road Warrior and Opportunistic conns are currently exceptions)\&.
++does not actually use the public key for our side of a conn but it isn\*(Aqt generally known at a add\-time which side is ours (Road Warrior and Opportunistic conns are currently exceptions)\&.
+ .PP
+ The
+ \fBmyid\fR
+diff -Naur openswan-2.6.32-rhel-orig/programs/pluto/demux.h openswan-2.6.32/programs/pluto/demux.h
+--- openswan-2.6.32-rhel-orig/programs/pluto/demux.h	2010-12-17 20:23:54.000000000 -0500
++++ openswan-2.6.32/programs/pluto/demux.h	2013-04-03 16:20:53.496765900 -0400
+@@ -1,5 +1,6 @@
+ /* demultiplex incoming IKE messages
+  * Copyright (C) 1998-2002  D. Hugh Redelmeier.
++ * Copyright (C) 2013 Paul Wouters <paul@libreswan.org>
+  *
+  * This program is free software; you can redistribute it and/or modify it
+  * under the terms of the GNU General Public License as published by the
+@@ -11,7 +12,6 @@
+  * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+  * for more details.
+  *
+- * RCSID $Id: demux.h,v 1.36 2005/08/31 03:36:53 mcr Exp $
+  */
+ 
+ #ifndef _DEMUX_H
+@@ -23,7 +23,9 @@
+ 
+ struct state;	/* forward declaration of tag */
+ extern void init_demux(void);
+-extern bool send_packet(struct state *st, const char *where, bool verbose);
++extern bool send_ike_msg(struct state *st, const char *where);
++extern bool resend_ike_v1_msg(struct state *st, const char *where);
++extern bool send_keepalive(struct state *st, const char *where);
+ extern void comm_handle(const struct iface_port *ifp);
+ 
+ extern pb_stream reply_stream;
+@@ -76,6 +78,7 @@
+     notification_t note;	/* reason for failure */
+     bool dpd;           /* Peer supports RFC 3706 DPD */
+     bool ikev2;         /* Peer supports IKEv2 */
++    bool fragvid;       /* Peer supports FRAGMENTATION */
+     bool event_already_set;
+     stf_status result;  /* temporary stored here for access by Tcl */
+ 
+diff -Naur openswan-2.6.32-rhel-orig/programs/pluto/ikev1_aggr.c openswan-2.6.32/programs/pluto/ikev1_aggr.c
+--- openswan-2.6.32-rhel-orig/programs/pluto/ikev1_aggr.c	2013-04-03 15:32:14.568705372 -0400
++++ openswan-2.6.32/programs/pluto/ikev1_aggr.c	2013-04-03 16:21:16.133026347 -0400
+@@ -1227,7 +1227,7 @@
+     DBG_cond_dump(DBG_RAW, "sending:\n",
+ 		  st->st_tpacket.ptr, st->st_tpacket.len);
+ 
+-    send_packet(st, "aggr_outI1", TRUE);
++    send_ike_msg(st, "aggr_outI1");
+ 
+     /* Set up a retransmission event, half a minute henceforth */
+     TCLCALLOUT("adjustTimers", st, st->st_connection, md);
+diff -Naur openswan-2.6.32-rhel-orig/programs/pluto/ikev1.c openswan-2.6.32/programs/pluto/ikev1.c
+--- openswan-2.6.32-rhel-orig/programs/pluto/ikev1.c	2013-04-03 15:32:14.539705028 -0400
++++ openswan-2.6.32/programs/pluto/ikev1.c	2013-04-03 16:59:07.635403008 -0400
+@@ -1,11 +1,13 @@
+ /* State machine for IKEv1
+  * Copyright (C) 1997 Angelos D. Keromytis.
+- * Copyright (C) 1998-2010  D. Hugh Redelmeier.
++ * Copyright (C) 1998-2010,2013  D. Hugh Redelmeier.
+  * Copyright (C) 2003-2008 Michael Richardson <mcr@xelerance.com>
+  * Copyright (C) 2008-2009 David McCullough <david_mccullough@securecomputing.com>
+  * Copyright (C) 2008-2010 Paul Wouters <paul@xelerance.com>
+  * Copyright (C) 2008 Hiren Joshi <joshihirenn@gmail.com>
+  * Copyright (C) 2009 Anthony Tong <atong@TrustedCS.com>
++ * Copyright (C) 2012-2013 Paul Wouters <paul@libreswan.org>
++ * Copyright (C) 2013 Wolfgang Nothdurft <wolfgang@linogate.de>
+  *
+  * This program is free software; you can redistribute it and/or modify it
+  * under the terms of the GNU General Public License as published by the
+@@ -1303,6 +1305,146 @@
+ 	openswan_log("IKE message has the Commit Flag set but Pluto doesn't implement this feature; ignoring flag");
+     }
+ 
++    /* Handle IKE fragmentation payloads */
++    if (md->hdr.isa_np == ISAKMP_NEXT_IKE_FRAGMENTATION)
++    {
++    	struct isakmp_ikefrag fraghdr;
++    	struct ike_frag *ike_frag, **i;
++    	int last_frag_index = 0;  /* index of the last fragment */
++    	pb_stream frag_pbs;
++
++    	if (st == NULL)
++    	{
++    		plog("received IKE fragment, but have no state. Ignoring packet.");
++    		return;
++    	}
++
++    	if ((st->st_connection->policy & POLICY_IKE_FRAG_ALLOW) == 0)
++    	{
++    	   loglog(RC_LOG, "discarding IKE fragment packet - fragmentation not allowed by local policy (ike_frag=no)");
++    	   return;
++    	}
++
++    	if (!in_struct(&fraghdr, &isakmp_ikefrag_desc, &md->message_pbs, &frag_pbs)
++    	||  pbs_room(&frag_pbs) != fraghdr.isafrag_length || fraghdr.isafrag_np != 0
++    	||  fraghdr.isafrag_number == 0 || fraghdr.isafrag_number > 16)
++    	{
++    		SEND_NOTIFICATION(PAYLOAD_MALFORMED);
++    		return;
++    	}
++
++    	DBG(DBG_CONTROL, DBG_log("received IKE fragment id '%d', number '%u'%s"
++    	    , fraghdr.isafrag_id
++    	    , fraghdr.isafrag_number
++    	    , (fraghdr.isafrag_flags == 1) ? "(last)" : ""));
++
++    	ike_frag = alloc_thing(struct ike_frag, "ike_frag");
++    	if (ike_frag == NULL)
++    		return;
++
++    	ike_frag->md = md;
++    	ike_frag->index = fraghdr.isafrag_number;
++    	ike_frag->last = (fraghdr.isafrag_flags & 1);
++    	ike_frag->size = pbs_left(&frag_pbs);
++    	ike_frag->data = frag_pbs.cur;
++
++#if 0 
++/* is this ever hit? It was wrongly checking one byte instead of 4 bytes of marker */
++    	/* Strip non-ESP marker from first fragment */
++    	if (md->iface->ike_float && ike_frag->index == 1
++    	    && (ike_frag->size >= NON_ESP_MARKER_SIZE
++    		&& memcmp(non_ESP_marker, ike_frag->data, NON_ESP_MARKER_SIZE) == 0))
++    	{
++    		ike_frag->data += NON_ESP_MARKER_SIZE;
++    		ike_frag->size -= NON_ESP_MARKER_SIZE;
++    	}
++#endif
++
++    	/* Add the fragment to the state */
++    	i = &st->ike_frags;
++    	while (1)
++    	{
++    		if (ike_frag)
++    		{
++    			/* Still looking for a place to insert ike_frag */
++    			if (*i == NULL || (*i)->index > ike_frag->index)
++    			{
++    				ike_frag->next = *i;
++    				*i = ike_frag;
++    				ike_frag = NULL;
++    			}
++    			else if ((*i)->index == ike_frag->index)
++    			{
++    				/* Replace fragment with same index */
++    				struct ike_frag *old = *i;
++    				ike_frag->next = old->next;
++    				*i = ike_frag;
++    				release_md(old->md);
++    				free(old);
++    				ike_frag = NULL;
++    			}
++    		}
++
++    		if (*i == NULL)
++    			break;
++    		else if ((*i)->last)
++    			last_frag_index = (*i)->index;
++
++    		i = &(*i)->next;
++    	};
++
++    	/* We have the last fragment, reassemble if complete */
++    	if (last_frag_index)
++    	{
++    		size_t size = 0;
++    		int prev_index = 0;
++    		struct ike_frag *frag;
++    		for (frag = st->ike_frags; frag; frag = frag->next)
++    		{
++    			size += frag->size;
++    			if (frag->index != ++prev_index)
++    			{
++    				break; /* fragment list incomplete */
++    			}
++    			else if (frag->index == last_frag_index)
++    			{
++    				struct msg_digest *md = alloc_md();
++    				u_int8_t *buffer = alloc_bytes(size, "IKE fragments buffer");
++    				size_t offset = 0;
++
++    				md->iface = frag->md->iface;
++    				md->sender = frag->md->sender;
++    				md->sender_port = frag->md->sender_port;
++
++    				/* Reassemble fragments in buffer */
++    				frag = st->ike_frags;
++    				while (frag && frag->index <= last_frag_index)
++    				{
++    					passert(offset + frag->size <= size);
++    					memcpy(buffer + offset, frag->data, frag->size);
++    					offset += frag->size;
++    					frag = frag->next;
++    				}
++
++    				init_pbs(&md->packet_pbs, buffer, size, "packet");
++
++    				process_packet(&md);
++    				if (md != NULL)
++    					release_md(md);
++    				release_fragments(st);
++    				/* optimize: if receiving fragments, immediately respond with fragments too */
++    				st->st_seen_fragments = TRUE;
++    				DBG(DBG_CONTROL, DBG_log(" updated IKE fragment state to respond using fragments without waiting for re-transmits"));
++    				break;
++    			}
++    		}
++    	}
++
++    	/* Don't release the md, taken care of by the ike_frag code */
++    	*mdp = NULL;
++    	return;
++    }
++
+     /* Set smc to describe this state's properties.
+      * Look up the appropriate microcode based on state and
+      * possibly Oakley Auth type.
+@@ -1369,7 +1511,7 @@
+ 		loglog(RC_RETRANSMISSION
+ 		    , "retransmitting in response to duplicate packet; already %s"
+ 		    , enum_name(&state_names, st->st_state));
+-		send_packet(st, "retransmit in response to duplicate", TRUE);
++		resend_ike_v1_msg(st, "retransmit in response to duplicate");
+ 	    }
+ 	    else
+ 	    {
+@@ -1934,6 +2076,12 @@
+     TCLCALLOUT("adjustFailure", st, (st ? st->st_connection : NULL), md);
+     result = md->result;
+ 
++    /* If state has FRAGMENTATION support, import it */
++    if( st && md->fragvid) {
++	DBG(DBG_CONTROLMORE, DBG_log("peer supports fragmentation"));
++	st->st_seen_fragvid = TRUE;
++    }
++
+     /* If state has DPD support, import it */
+     if( st && md->dpd && st->hidden_variables.st_dpd != md->dpd) {
+ 	DBG(DBG_DPD, DBG_log("peer supports dpd"));
+@@ -2006,6 +2154,9 @@
+ 		delete_event(st);
+ 	    }
+ 
++	    /* Delete IKE fragments */
++	    release_fragments(st);
++
+ 	    /* update the previous packet history */
+ 	    update_retransmit_history(st, md);
+ 
+@@ -2041,11 +2192,11 @@
+ 		/* actually send the packet
+ 		 * Note: this is a great place to implement "impairments"
+ 		 * for testing purposes.  Suppress or duplicate the
+-		 * send_packet call depending on st->st_state.
++		 * send_ike_msg call depending on st->st_state.
+ 		 */
+ 
+ 		TCLCALLOUT("avoidEmitting", st, st->st_connection, md);
+-		send_packet(st, enum_name(&state_names, from_state), TRUE);
++		send_ike_msg(st, enum_name(&state_names, from_state));
+ 	    }
+ 
+ 	    TCLCALLOUT("adjustTimers", st, st->st_connection, md);
+diff -Naur openswan-2.6.32-rhel-orig/programs/pluto/ikev1_main.c openswan-2.6.32/programs/pluto/ikev1_main.c
+--- openswan-2.6.32-rhel-orig/programs/pluto/ikev1_main.c	2013-04-03 15:32:14.540705040 -0400
++++ openswan-2.6.32/programs/pluto/ikev1_main.c	2013-04-03 17:11:04.824728112 -0400
+@@ -1,6 +1,6 @@
+ /* IPsec DOI and Oakley resolution routines
+  * Copyright (C) 1997 Angelos D. Keromytis.
+- * Copyright (C) 1998-2002  D. Hugh Redelmeier.
++ * Copyright (C) 1998-2002,2013  D. Hugh Redelmeier.
+  * Copyright (C) 2003-2008 Michael C. Richardson <mcr@xelerance.com>
+  * Copyright (C) 2003-2010 Paul Wouters <paul@xelerance.com>
+  * Copyright (C) 2009 Avesh Agarwal <avagarwa@redhat.com>
+@@ -8,6 +8,8 @@
+  * Copyright (C) 2009 Seong-hun Lim
+  * Copyright (C) 2008-2009 David McCullough <david_mccullough@securecomputing.com>
+  * Copyright (C) 2010 Tuomo Soini <tis@foobar.fi>
++ * Copyright (C) 2013 Paul Wouters <paul@libreswan.org>
++ * Copyright (C) 2013 Wolfgang Nothdurft <wolfgang@linogate.de>
+  *
+  * This program is free software; you can redistribute it and/or modify it
+  * under the terms of the GNU General Public License as published by the
+@@ -119,6 +121,13 @@
+     struct msg_digest md;   /* use reply/rbody found inside */
+ 
+     int numvidtosend = 1;  /* we always send DPD VID */
++
++    /* Increase VID counter for VID_IKE_FRAGMENTATION */
++    if(c->policy & POLICY_IKE_FRAG_ALLOW)
++    {
++	numvidtosend++;
++    }
++
+ #ifdef NAT_TRAVERSAL
+     if (nat_traversal_enabled) {
+ 	numvidtosend++;
+@@ -222,6 +231,16 @@
+ 	}
+     }
+ 
++    /* Announce our ability to do IKE Fragmentation */
++    if(c->policy & POLICY_IKE_FRAG_ALLOW)
++    {
++	int np = --numvidtosend > 0 ? ISAKMP_NEXT_VID : ISAKMP_NEXT_NONE;
++	if(!out_vid(np, &md.rbody, VID_IKE_FRAGMENTATION)) {
++	    reset_cur_state();
++	    return STF_INTERNAL_ERROR;
++	}
++    }
++
+ #ifdef NAT_TRAVERSAL
+     DBG(DBG_NATT, DBG_log("nat traversal enabled: %d"
+ 			  , nat_traversal_enabled));
+@@ -262,7 +281,7 @@
+ 	, "reply packet for main_outI1");
+ 
+     /* Transmit */
+-    send_packet(st, "main_outI1", TRUE);
++    send_ike_msg(st, "main_outI1");
+ 
+     /* Set up a retransmission event, half a minute henceforth */
+     TCLCALLOUT("adjustTimers", st, st->st_connection, &md);
+@@ -939,12 +958,27 @@
+     /*
+      * NOW SEND VENDOR ID payloads 
+      */
+-       
++
++    /* Increase VID counter for VID_IKE_FRAGMENTATION */
++    if(c->policy & POLICY_IKE_FRAG_ALLOW)
++    {
++	numvidtosend++;
++    }
++
+     /* Announce our ability to do RFC 3706 Dead Peer Detection */
+     next = --numvidtosend ? ISAKMP_NEXT_VID : ISAKMP_NEXT_NONE;
+     if( !out_vid(next, &md->rbody, VID_MISC_DPD))
+       return STF_INTERNAL_ERROR;
+ 
++    /* Announce our ability to do IKE Fragmentation */
++    if(c->policy & POLICY_IKE_FRAG_ALLOW)
++    {
++	next = --numvidtosend > 0 ? ISAKMP_NEXT_VID : ISAKMP_NEXT_NONE;
++	if(!out_vid(next, &md->rbody, VID_IKE_FRAGMENTATION)) {
++	   return STF_INTERNAL_ERROR;
++	}
++    }
++
+ #ifdef XAUTH
+     /* If XAUTH is required, insert here Vendor ID */
+     if(c->spd.this.xauth_server || c->spd.this.xauth_client)
+@@ -2423,7 +2457,7 @@
+         chunk_t saved_tpacket = st->st_tpacket;
+ 
+         setchunk(st->st_tpacket, reply_stream.start, pbs_offset(&reply_stream));
+-        send_packet(st, "ISAKMP notify", TRUE);
++        send_ike_msg(st, "ISAKMP notify");
+         st->st_tpacket = saved_tpacket;
+     }       
+     /* get back old IV for this state */
+@@ -2620,7 +2654,7 @@
+ 
+ 	setchunk(sndst->st_tpacket, pbs.start, pbs_offset(&pbs));
+ 	TCLCALLOUT_notify("avoidEmittingNotification", sndst, &pbs, &hdr);
+-	send_packet(sndst, "notification packet", TRUE);
++	send_ike_msg(sndst, "notification packet");
+ #ifdef TPM
+     tpm_stolen:  
+     tpm_ignore:
+@@ -2665,7 +2699,7 @@
+ send_notification_from_md(struct msg_digest *md, u_int16_t type)
+ {
+     /**
+-     * Create a dummy state to be able to use send_packet in
++     * Create a dummy state to be able to use send_ike_msg() in
+      * send_notification
+      *
+      * we need to set:
+@@ -2860,7 +2894,7 @@
+ 
+ 	setchunk(p1st->st_tpacket, reply_pbs.start, pbs_offset(&reply_pbs));
+ 	TCLCALLOUT_notify("avoidEmittingDelete", p1st, &reply_pbs, &hdr);
+-	send_packet(p1st, "delete notify", TRUE);
++	send_ike_msg(p1st, "delete notify");
+ #ifdef TPM
+     tpm_stolen:  
+     tpm_ignore:
+diff -Naur openswan-2.6.32-rhel-orig/programs/pluto/ikev1_quick.c openswan-2.6.32/programs/pluto/ikev1_quick.c
+--- openswan-2.6.32-rhel-orig/programs/pluto/ikev1_quick.c	2013-04-03 15:32:14.581705525 -0400
++++ openswan-2.6.32/programs/pluto/ikev1_quick.c	2013-04-03 17:12:25.656666249 -0400
+@@ -1022,7 +1022,7 @@
+ 
+     /* send the packet */
+ 
+-    send_packet(st, "quick_outI1", TRUE);
++    send_ike_msg(st, "quick_outI1");
+ 
+     delete_event(st);
+     event_schedule(EVENT_RETRANSMIT, EVENT_RETRANSMIT_DELAY_0, st);
+diff -Naur openswan-2.6.32-rhel-orig/programs/pluto/ikev2.c openswan-2.6.32/programs/pluto/ikev2.c
+--- openswan-2.6.32-rhel-orig/programs/pluto/ikev2.c	2013-04-03 15:32:14.613705904 -0400
++++ openswan-2.6.32/programs/pluto/ikev2.c	2013-04-03 17:13:26.443371744 -0400
+@@ -369,7 +369,7 @@
+ 		}
+ 		if(st->st_msgid_last_remotereq != INVALID_MSGID && st->st_msgid_last_remotereq == md->msgid_received){
+ 		/* this is a recent retransmit. */
+-		send_packet(st, "ikev2-responder-retransmit", FALSE);
++		send_ike_msg(st, "ikev2-responder-retransmit");
+ 		return;
+ 		}
+ 	    }
+@@ -434,7 +434,7 @@
+ 		}
+ 		if(st->st_msgid_last_remotereq != INVALID_MSGID && st->st_msgid_last_remotereq == md->msgid_received){
+ 		/* this is a recent retransmit. */
+-		send_packet(st, "ikev2-responder-retransmit", FALSE);
++		send_ike_msg(st, "ikev2-responder-retransmit");
+ 		return;
+ 		}
+ 	    }
+@@ -649,7 +649,7 @@
+     struct connection cnx;
+ 
+     /**
+-     * Create a dummy state to be able to use send_packet in
++     * Create a dummy state to be able to use send_ike_msg() in
+      * send_notification
+      *
+      * we need to set:
+@@ -789,11 +789,11 @@
+ 	/* actually send the packet
+ 	 * Note: this is a great place to implement "impairments"
+ 	 * for testing purposes.  Suppress or duplicate the
+-	 * send_packet call depending on st->st_state.
++	 * send_ike_msg call depending on st->st_state.
+ 	 */
+ 
+ 	TCLCALLOUT("avoidEmitting", st, st->st_connection, md);
+-	send_packet(st, enum_name(&state_names, from_state), TRUE);
++	send_ike_msg(st, enum_name(&state_names, from_state));
+     }
+ 
+     TCLCALLOUT("adjustTimers", st, st->st_connection, md);
+diff -Naur openswan-2.6.32-rhel-orig/programs/pluto/ikev2_parent.c openswan-2.6.32/programs/pluto/ikev2_parent.c
+--- openswan-2.6.32-rhel-orig/programs/pluto/ikev2_parent.c	2013-04-03 15:32:14.636706177 -0400
++++ openswan-2.6.32/programs/pluto/ikev2_parent.c	2013-04-03 17:14:24.644047222 -0400
+@@ -467,7 +467,7 @@
+ 		 , pbs_offset(&reply_stream), "saved first packet");
+ 
+     /* Transmit */
+-    send_packet(st, __FUNCTION__, TRUE);
++    send_ike_msg(st, __FUNCTION__);
+     ikev2_update_counters(md, req_sent);
+ 
+     /* Set up a retransmission event, half a minute henceforth */
+@@ -1472,7 +1472,7 @@
+     TCLCALLOUT("v2_avoidEmitting", st, st->st_connection, md);
+ 
+     /* keep it for a retransmit if necessary, but on initiator
+-     * we never do that, but send_packet() uses it.
++     * we never do that, but send_ike_msg() uses it.
+      */
+     freeanychunk(pst->st_tpacket);
+     clonetochunk(pst->st_tpacket, reply_stream.start, pbs_offset(&reply_stream)
+@@ -2358,7 +2358,7 @@
+    clonetochunk(p1st->st_tpacket, reply.start, pbs_offset(&reply)
+ 		                    , "notification packet");
+ 
+-   send_packet(p1st, __FUNCTION__, TRUE);
++   send_ike_msg(p1st, __FUNCTION__);
+ }
+ /* add notify payload to the rbody */
+ bool ship_v2N (unsigned int np, u_int8_t  critical,
+@@ -2672,7 +2672,7 @@
+ 	clonetochunk(st->st_tpacket, reply_stream.start, pbs_offset(&reply_stream)
+ 			, "reply packet for informational exchange");
+ 
+-	send_packet(st, __FUNCTION__, TRUE);
++	send_ike_msg(st, __FUNCTION__);
+ 	ikev2_update_counters(md, response_sent);
+ 	}
+ 
+@@ -2997,7 +2997,7 @@
+ 	clonetochunk(pst->st_tpacket, reply_stream.start, pbs_offset(&reply_stream)
+ 			, "request packet for informational exchange");
+ 
+-	send_packet(pst, __FUNCTION__, TRUE);
++	send_ike_msg(pst, __FUNCTION__);
+ 
+ 	/* update state */
+ 	ikev2_update_counters(&md, req_sent);
+diff -Naur openswan-2.6.32-rhel-orig/programs/pluto/kernel_mast.c openswan-2.6.32/programs/pluto/kernel_mast.c
+--- openswan-2.6.32-rhel-orig/programs/pluto/kernel_mast.c	2013-04-03 15:32:14.629706094 -0400
++++ openswan-2.6.32/programs/pluto/kernel_mast.c	2013-04-03 17:56:54.351192043 -0400
+@@ -451,8 +451,7 @@
+ 		       "%s"        /* actual script */
+ 		       , ref
+ 		       , refhim
+-		       , (c->policy & POLICY_SAREF_TRACK_CONNTRACK) ? "conntrack" : 
+-			( (c->policy & POLICY_SAREF_TRACK) ? "yes" : "no")
++		       , (c->policy & POLICY_SAREF_TRACK) ? "yes" : "no"
+ 		       , verb, verb_suffix
+ 		       , common_shell_out_str
+ 		       , sr->this.updown == NULL? DEFAULT_UPDOWN : sr->this.updown))
+diff -Naur openswan-2.6.32-rhel-orig/programs/pluto/nat_traversal.c openswan-2.6.32/programs/pluto/nat_traversal.c
+--- openswan-2.6.32-rhel-orig/programs/pluto/nat_traversal.c	2013-04-03 15:32:14.527704886 -0400
++++ openswan-2.6.32/programs/pluto/nat_traversal.c	2013-04-03 17:14:54.513393863 -0400
+@@ -7,6 +7,7 @@
+  * Copyright (C) 2009 Tuomo Soini <tis@foobar.fi>
+  * Copyright (C) 2009 Gilles Espinasse <g.esp@free.fr>
+  * Copyright (C) 2009 David McCullough <david_mccullough@securecomputing.com>
++ * Copyright (C) 2013 D. Hugh Redelmeier.
+  *
+  * This program is free software; you can redistribute it and/or modify it
+  * under the terms of the GNU General Public License as published by the
+@@ -769,7 +770,7 @@
+ 
+ 	/** send keep alive */
+ 	setchunk(st->st_tpacket, &ka_payload, 1);
+-	send_packet(st, "NAT-T Keep Alive", FALSE);
++	send_keepalive(st, "NAT-T Keep Alive");
+ 
+ 	/** restore state chunk */
+ 	setchunk(st->st_tpacket, sav.ptr, sav.len);
+diff -Naur openswan-2.6.32-rhel-orig/programs/pluto/server.c openswan-2.6.32/programs/pluto/server.c
+--- openswan-2.6.32-rhel-orig/programs/pluto/server.c	2010-12-17 20:23:54.000000000 -0500
++++ openswan-2.6.32/programs/pluto/server.c	2013-04-03 17:20:56.219591512 -0400
+@@ -6,6 +6,9 @@
+  * Copyright (C) 2008-2009 David McCullough <david_mccullough@securecomputing.com>
+  * Copyright (C) 2009 Avesh Agarwal <avagarwa@redhat.com>
+  * Copyright (C) 2010 Tuomo Soini <tis@foobar.fi>
++ * Copyright (C) 2012-2013 Paul Wouters <paul@libreswan.org>
++ * Copyright (C) 2013 Wolfgang Nothdurft <wolfgang@linogate.de>
++ * Copyright (C) 2013  D. Hugh Redelmeier.
+  *
+  * This program is free software; you can redistribute it and/or modify it
+  * under the terms of the GNU General Public License as published by the
+@@ -1092,43 +1095,78 @@
+ }
+ #endif /* defined(IP_RECVERR) && defined(MSG_ERRQUEUE) */
+ 
+-bool
+-send_packet(struct state *st, const char *where, bool verbose)
++/* send_ike_msg logic is broken into layers.
++ * The rest of the system thinks it is simple.
++ * We have three entrypoints that control options
++ * for reporting write failure and actions on resending (fragment?):
++ * send_ike_msg(), resend_ike_v1_msg(), and send_keepalive().
++ *
++ * The first two call send_or_resend_ike_msg().
++ * That handles an IKE message.
++ * It calls send_frags() if the message needs to be fragmented.
++ * Otherwise it calls send_packet() to send it in one gulp.
++ *
++ * send_frags() breaks an IKE message into fragments and sends
++ * them by send_packet().
++ *
++ * send_keepalive() calls send_packet() directly: uses a special
++ * tiny packet; non-ESP marker does not apply; logging on write error
++ * is suppressed.
++ *
++ * send_packet() sends a UDP packet, possibly prefixed by a non-ESP Marker
++ * for NATT.  It accepts two chunks because this avoids double-copying.
++ */
++
++static bool
++send_packet(struct state *st, const char *where, bool just_a_keepalive
++, const u_int8_t *aptr, size_t alen
++, const u_int8_t *bptr, size_t blen)
+ {
+-    u_int8_t ike_pkt[MAX_OUTPUT_UDP_SIZE];
+-    u_int8_t *ptr;
+-    unsigned long len;
++    /* NOTE: on system with limited stack, buf could be made static */
++    u_int8_t buf[MAX_OUTPUT_UDP_SIZE];
++
++    /* Each fragment, if we are doing NATT, needs a non-ESP_Marker prefix.
++     * natt_bonus is the size of the addition (0 if not needed).
++     */
++    const size_t natt_bonus = !just_a_keepalive && st->st_interface->ike_float
++	? NON_ESP_MARKER_SIZE : 0;
++
++    const u_int8_t *ptr;
++    unsigned long len = natt_bonus + alen + blen;
+     ssize_t wlen;
+ 
+-    if ((st->st_interface->ike_float == TRUE) && (st->st_tpacket.len != 1)) {
+-	if ((unsigned long) st->st_tpacket.len >
+-	    (MAX_OUTPUT_UDP_SIZE-sizeof(u_int32_t))) {
+-	    DBG_log("send_packet(): really too big");
+-	    return FALSE;
+-	}
+-	ptr = ike_pkt;
+-	/** Add Non-ESP marker **/
+-	memset(ike_pkt, 0, sizeof(u_int32_t));
+-	memcpy(ike_pkt + sizeof(u_int32_t), st->st_tpacket.ptr,
+-	       (unsigned long)st->st_tpacket.len);
+-	len = (unsigned long) st->st_tpacket.len + sizeof(u_int32_t);
+-    }
+-    else {
+-	ptr = st->st_tpacket.ptr;
+-	len = (unsigned long) st->st_tpacket.len;
++    if (len > MAX_OUTPUT_UDP_SIZE) {
++	DBG_log("send_ike_msg(): really too big %lu bytes", (unsigned long) len);
++	return FALSE;
++    }
++
++    if (len != alen) {
++	/* copying required */
++
++	/* 1. non-ESP Marker (0x00 octets) */
++	memset(buf, 0x00, natt_bonus);
++
++	/* 2. chunk a */
++	memcpy(buf + natt_bonus, aptr, alen);
++
++	/* 3. chunk b */
++	memcpy(buf + natt_bonus + alen, bptr, blen);
++
++	ptr = buf;
++    } else {
++	ptr = aptr;
+     }
+ 
+     DBG(DBG_CONTROL|DBG_RAW
+ 	, DBG_log("sending %lu bytes for %s through %s:%d to %s:%u (using #%lu)"
+-		  , (unsigned long) st->st_tpacket.len
++		  , (unsigned long) len
+ 		  , where
+ 		  , st->st_interface->ip_dev->id_rname
+ 		  , st->st_interface->port
+ 		  , ip_str(&st->st_remoteaddr)
+ 		  , st->st_remoteport
+ 		  , st->st_serialno));
+-    DBG(DBG_RAW
+-	, DBG_dump(NULL, ptr, len));
++    DBG(DBG_RAW, DBG_dump(NULL, ptr, len));
+ 
+     setportof(htons(st->st_remoteport), &st->st_remoteaddr);
+ 
+@@ -1137,21 +1175,31 @@
+ #endif /* defined(IP_RECVERR) && defined(MSG_ERRQUEUE) */
+ 
+     wlen = sendto(st->st_interface->fd
+-		  , ptr
+-		  , len, 0
+-		  , sockaddrof(&st->st_remoteaddr)
+-		  , sockaddrlenof(&st->st_remoteaddr));
++	, ptr
++	, len, 0
++	, sockaddrof(&st->st_remoteaddr)
++	, sockaddrlenof(&st->st_remoteaddr));
++
++    if (wlen != (ssize_t)len)
++    {
++	if (just_a_keepalive) {
++	    log_errno((e, "sendto on %s to %s:%u failed in %s"
++		       , st->st_interface->ip_dev->id_rname
++		       , ip_str(&st->st_remoteaddr)
++		       , st->st_remoteport
++		       , where));
++	}
++	return FALSE;
++    }
+ 
+ #ifdef DEBUG
+-    /* XXX This is a flow change depending on debug. not good. I assume it is only useful
+-     * for actual debugging something 
+-     */
+-    if(DBGP(IMPAIR_JACOB_TWO_TWO)) {
++    /* Send a duplicate packet when this impair is enabled - used for testing */
++    if (DBGP(IMPAIR_JACOB_TWO_TWO)) {
+ 	/* sleep for half a second, and second another packet */
+ 	usleep(500000);
+ 
+ 	DBG_log("JACOB 2-2: resending %lu bytes for %s through %s:%d to %s:%u:"
+-		, (unsigned long) st->st_tpacket.len
++		, (unsigned long) len
+ 		, where
+ 		, st->st_interface->ip_dev->id_rname
+ 		, st->st_interface->port
+@@ -1163,28 +1211,158 @@
+ 		      , len, 0
+ 		      , sockaddrof(&st->st_remoteaddr)
+ 		      , sockaddrlenof(&st->st_remoteaddr));
++	if (wlen != (ssize_t)len)
++	{
++	    if (just_a_keepalive) {
++		log_errno((e, "sendto on %s to %s:%u failed in %s"
++			   , st->st_interface->ip_dev->id_rname
++			   , ip_str(&st->st_remoteaddr)
++			   , st->st_remoteport
++			   , where));
++	    }
++	    return FALSE;
++	}
+     }
+ #endif
++    return TRUE;
++}
+ 
+-    if (wlen != (ssize_t)len)
+-    {
+-        /* do not log NAT-T Keep Alive packets */
+-        if (!verbose)
+-	    return FALSE; 
+-	log_errno((e, "sendto on %s to %s:%u failed in %s"
+-		   , st->st_interface->ip_dev->id_rname
+-		   , ip_str(&st->st_remoteaddr)
+-		   , st->st_remoteport
+-		   , where));
+-	return FALSE;
++/* 
++ * non-IETF magic voodoo we need to consider for interop:
++ * - www.cisco.com/en/US/docs/ios/sec_secure_connectivity/configuration/guide/sec_fragment_ike_pack.html
++ * - www.cisco.com/en/US/docs/ios-xml/ios/sec_conn_ikevpn/configuration/15-mt/sec-fragment-ike-pack.pdf
++ * - msdn.microsoft.com/en-us/library/cc233452.aspx 
++ * - iOS/Apple racoon source ipsec-164.9 at www.opensource.apple.com (frak length 1280)
++ * - stock racoon source (frak length 552)
++ */
++
++static bool
++send_frags(struct state *st, const char *where)
++{
++    unsigned int fragnum = 0;
++
++    /* Each fragment, if we are doing NATT, needs a non-ESP_Marker prefix.
++     * natt_bonus is the size of the addition (0 if not needed).
++     */
++    const size_t natt_bonus = st->st_interface->ike_float ? NON_ESP_MARKER_SIZE : 0;
++
++    /* We limit fragment packets to ISAKMP_FRAG_MAXLEN octets.
++     * max_data_len is the maximum data length that will fit within it.
++     */
++    const size_t max_data_len = ((st->st_connection->addr_family == AF_INET) ? ISAKMP_FRAG_MAXLEN_IPv4 : ISAKMP_FRAG_MAXLEN_IPv6)
++        - (natt_bonus + NSIZEOF_isakmp_hdr + NSIZEOF_isakmp_ikefrag);
++
++    u_int8_t *packet_cursor = st->st_tpacket.ptr;
++    size_t packet_remainder_len = st->st_tpacket.len;
++
++    /* BUG: this code does not use the marshalling code
++     * in packet.h to translate between wire and host format.
++     * This is dangerous.  The following assertion should
++     * fail in most cases where this cheat won't work.
++     */
++    passert(sizeof(struct isakmp_hdr) == NSIZEOF_isakmp_hdr
++	&& sizeof(struct isakmp_ikefrag) == NSIZEOF_isakmp_ikefrag);
++
++    while (packet_remainder_len > 0) {
++	u_int8_t frag_prefix[NSIZEOF_isakmp_hdr + NSIZEOF_isakmp_ikefrag];
++	const size_t data_len = packet_remainder_len > max_data_len
++	    ? max_data_len : packet_remainder_len;
++	const size_t fragpl_len = NSIZEOF_isakmp_ikefrag + data_len;
++	const size_t isakmppl_len = NSIZEOF_isakmp_hdr + fragpl_len;
++
++	fragnum++;
++
++	/* emit isakmp header derived from original */
++	{
++	    struct isakmp_hdr *ih = (struct isakmp_hdr*) frag_prefix;
++
++	    memcpy(ih, st->st_tpacket.ptr, NSIZEOF_isakmp_hdr);
++	    ih->isa_np = ISAKMP_NEXT_IKE_FRAGMENTATION;	/* one octet */
++	    /* Do we need to set any of ISAKMP_FLAG_ENCRYPTION, ISAKMP_FLAGS_R or ISAKMP_FLAGS_I ?
++	     * seems there might be disagreement between Cisco and Microsoft.
++	     * st->st_suspended_md->hdr.isa_flags; TODO must this be set?
++	     */
++	    ih->isa_flags &= ~ISAKMP_FLAG_ENCRYPTION;
++	    ih->isa_length = htonl(isakmppl_len);
++	}
++
++	/* Append the ike frag header */
++	{
++	    struct isakmp_ikefrag *fh = (struct isakmp_ikefrag*) (frag_prefix + NSIZEOF_isakmp_hdr);
++
++	    fh->isafrag_np = 0; /* must be zero */
++	    fh->isafrag_reserved = 0; /* reserved at this time, must be zero */
++	    fh->isafrag_length = htons(fragpl_len);
++	    fh->isafrag_id = htons(1); /* In theory required to be unique, in practise not needed? */
++	    fh->isafrag_number = fragnum; /* one byte, no htons() call needed */
++	    fh->isafrag_flags = packet_remainder_len == data_len
++		? ISAKMP_FRAG_LAST : 0;
++	}
++	DBG(DBG_CONTROL, DBG_log("sending IKE fragment id '%d', number '%u'%s"
++		, 1 /* hard coded for now, seems to be what all the cool implementations do */
++		, fragnum
++		, (packet_remainder_len == data_len) ? " (last)" : ""
++		));
++
++	if (!send_packet(st, where, FALSE
++	    , frag_prefix, NSIZEOF_isakmp_hdr + NSIZEOF_isakmp_ikefrag
++	    , packet_cursor, data_len))
++	{
++		return FALSE;
++	}
++
++	packet_remainder_len -= data_len;
++	packet_cursor += data_len;
+     }
+-    else
++    return TRUE;
++}
++
++
++static bool
++send_or_resend_ike_msg(struct state *st, const char *where, bool resending)
++{
++    size_t len = st->st_tpacket.len;
++    /* Each fragment, if we are doing NATT, needs a non-ESP_Marker prefix.
++     * natt_bonus is the size of the addition (0 if not needed).
++     */
++    const size_t natt_bonus = st->st_interface->ike_float ? NON_ESP_MARKER_SIZE : 0;
++
++    /* decide of whether we're to fragment  - IKEv1 only, draft-smyslov-ipsecme-ikev2-fragmentation not implemented yet */
++    if (!st->st_ikev2
++    && st->st_state != STATE_MAIN_I1
++    && len+natt_bonus >= ((st->st_connection->addr_family == AF_INET) ? ISAKMP_FRAG_MAXLEN_IPv4 : ISAKMP_FRAG_MAXLEN_IPv6)
++    && ((resending && (st->st_connection->policy & POLICY_IKE_FRAG_ALLOW) && st->st_seen_fragvid)
++       || ((st->st_connection->policy & POLICY_IKE_FRAG_FORCE) || st->st_seen_fragments == TRUE)))
+     {
+-	return TRUE;
++	return send_frags(st, where);
++    } else {
++	return send_packet(st, where, FALSE, st->st_tpacket.ptr, st->st_tpacket.len, NULL, (size_t) 0);
+     }
+ }
+ 
++bool
++send_ike_msg(struct state *st, const char *where)
++{
++    return send_or_resend_ike_msg(st, where, FALSE);
++}
+ 
++bool
++resend_ike_v1_msg(struct state *st, const char *where)
++{
++    return send_or_resend_ike_msg(st, where, TRUE);
++}
++
++/* send keepalive is special in two ways:
++ * We don't want send errors logged (too noisy).
++ * We don't want the packet prefixed with a non-ESP Marker.
++ */
++bool
++send_keepalive(struct state *st, const char *where)
++{
++    static const unsigned char ka_payload = 0xff;
++
++    return send_packet(st, where, TRUE, &ka_payload, sizeof(ka_payload), NULL, (size_t) 0);
++}
+ 
+ /*
+  * Local Variables:
+diff -Naur openswan-2.6.32-rhel-orig/programs/pluto/state.c openswan-2.6.32/programs/pluto/state.c
+--- openswan-2.6.32-rhel-orig/programs/pluto/state.c	2013-04-03 15:32:14.617705952 -0400
++++ openswan-2.6.32/programs/pluto/state.c	2013-04-03 17:23:53.886649108 -0400
+@@ -1,6 +1,7 @@
+ /* routines for state objects
+  * Copyright (C) 1997 Angelos D. Keromytis.
+  * Copyright (C) 1998-2001  D. Hugh Redelmeier.
++ * Copyright (C) 1998-2001,2013  D. Hugh Redelmeier.
+  * Copyright (C) 2003-2008 Michael C Richardson <mcr@xelerance.com> 
+  * Copyright (C) 2003-2009 Paul Wouters <paul@xelerance.com> 
+  * Copyright (C) 2008-2009 David McCullough <david_mccullough@securecomputing.com>
+@@ -351,6 +352,25 @@
+     close_any(st->st_whack_sock);
+ }
+ 
++void release_fragments(struct state *st)
++{
++	struct ike_frag *frag;
++
++	if (!st)
++		return;
++
++	frag = st->ike_frags;
++	while (frag)
++	{
++		struct ike_frag *this = frag;
++		frag = this->next;
++		release_md(this->md);
++		free(this);
++	}
++
++	st->ike_frags = NULL;
++}
++
+ /* freeing allocated traffic selectors */
+ static void delete_ts(struct traffic_selector *ts) {
+ 	struct traffic_selector *tmp;
+@@ -505,6 +525,7 @@
+     }
+ 
+     unreference_key(&st->st_peer_pubkey);
++    release_fragments(st);
+ 
+     free_sa(st->st_sadb);
+     st->st_sadb=NULL;
+diff -Naur openswan-2.6.32-rhel-orig/programs/pluto/state.h openswan-2.6.32/programs/pluto/state.h
+--- openswan-2.6.32-rhel-orig/programs/pluto/state.h	2013-04-03 15:32:14.617705952 -0400
++++ openswan-2.6.32/programs/pluto/state.h	2013-04-03 17:46:17.496930184 -0400
+@@ -5,6 +5,7 @@
+  * Copyright (C) 2003-2009 Paul Wouters <paul@xelerance.com> 
+  * Copyright (C) 2008-2009 David McCullough <david_mccullough@securecomputing.com>
+  * Copyright (C) 2009 Avesh Agarwal <avagarwa@redhat.com>
++ * Copyright (C) 2013 Paul Wouters <paul@libreswan.org>
+  *
+  * This program is free software; you can redistribute it and/or modify it
+  * under the terms of the GNU General Public License as published by the
+@@ -126,6 +127,16 @@
+     time_t peer_lastused;
+ };
+ 
++struct ike_frag
++{
++	struct ike_frag *next;
++	struct msg_digest *md;
++	int index;
++	int last;
++	u_int8_t *data;
++	size_t size;
++};
++
+ /*
+  * internal state that
+  * should get copied by god... to the child SA state.
+@@ -209,6 +220,8 @@
+     const char        *st_suspended_md_func;
+     int                st_suspended_md_line;
+ 
++    struct ike_frag *ike_frags;              /* collected ike fragments */
++
+     struct trans_attrs st_oakley;
+ 
+     struct ipsec_proto_info st_ah;
+@@ -389,6 +402,8 @@
+ 						  recognized Vendor ID */
+     struct isakmp_quirks quirks;          /* work arounds for faults in other
+  					   * products */
++    bool  st_seen_fragvid;                /* should really use st_seen_vendorid, but no one else is */
++    bool  st_seen_fragments;              /* did we receive ike fragments from peer, if so use them in return as well */
+     
+ };
+ 
+diff -Naur openswan-2.6.32-rhel-orig/programs/pluto/timer.c openswan-2.6.32/programs/pluto/timer.c
+--- openswan-2.6.32-rhel-orig/programs/pluto/timer.c	2010-12-17 20:23:54.000000000 -0500
++++ openswan-2.6.32/programs/pluto/timer.c	2013-04-03 17:27:13.979920862 -0400
+@@ -1,6 +1,6 @@
+ /* timer event handling
+  * Copyright (C) 1997 Angelos D. Keromytis.
+- * Copyright (C) 1998-2001  D. Hugh Redelmeier.
++ * Copyright (C) 1998-2001,2013  D. Hugh Redelmeier.
+  * Copyright (C) 2005-2008 Michael Richardson <mcr@xelerance.com>
+  * Copyright (C) 2008-2010 Paul Wouters <paul@xelerance.com>
+  * Copyright (C) 2009 David McCullough <david_mccullough@securecomputing.com>
+@@ -189,7 +189,7 @@
+ 		  , "%s: retransmission; will wait %lus for response"
+ 		  , enum_name(&state_names, st->st_state)
+ 		  , (unsigned long)delay);
+-	send_packet(st, "EVENT_RETRANSMIT", TRUE);
++	resend_ike_v1_msg(st, "EVENT_RETRANSMIT");
+ 	event_schedule(EVENT_RETRANSMIT, delay, st);
+     }
+     else
+@@ -308,7 +308,7 @@
+ 		  , "%s: retransmission; will wait %lus for response"
+ 		  , enum_name(&state_names, st->st_state)
+ 		  , (unsigned long)delay);
+-	send_packet(st, "EVENT_v2_RETRANSMIT", TRUE);
++	send_ike_msg(st, "EVENT_v2_RETRANSMIT");
+ 	event_schedule(EVENT_v2_RETRANSMIT, delay, st);
+ 	return;
+     }
+diff -Naur openswan-2.6.32-rhel-orig/programs/pluto/vendor.c openswan-2.6.32/programs/pluto/vendor.c
+--- openswan-2.6.32-rhel-orig/programs/pluto/vendor.c	2010-12-17 20:23:54.000000000 -0500
++++ openswan-2.6.32/programs/pluto/vendor.c	2013-04-03 17:30:24.243082377 -0400
+@@ -276,7 +276,7 @@
+ 	{ VID_MACOSX, VID_STRING|VID_SUBSTRING_DUMPHEXA, "Mac OSX 10.x",
+ 	  "\x4d\xf3\x79\x28\xe9\xfc\x4f\xd1\xb3\x26\x21\x70\xd5\x15\xc6\x62", NULL, 0},
+ 
+-	DEC_MD5_VID(MISC_FRAGMENTATION, "FRAGMENTATION")
++	DEC_MD5_VID(IKE_FRAGMENTATION, "FRAGMENTATION")
+ 	DEC_MD5_VID(INITIAL_CONTACT, "Vid-Initial-Contact")
+ 
+ 	/* Microsoft Windows Vista, and maybe Server 2008? */
+@@ -353,7 +353,7 @@
+ 	/**
+ 	 * Cisco VPN 3000
+ 	 */
+-	{ VID_MISC_FRAGMENTATION, VID_MD5HASH | VID_SUBSTRING_DUMPHEXA,
++	{ VID_IKE_FRAGMENTATION, VID_MD5HASH | VID_SUBSTRING_DUMPHEXA,
+ 		"FRAGMENTATION", NULL, NULL, 0 },
+ 
+ 	/*
+@@ -564,7 +564,12 @@
+ 	case VID_OPENSWANSELF:
+ 	    vid_usefull=1;
+ 	    break;
+-	    
++
++	case VID_CISCO_IKE_FRAGMENTATION:
++	case VID_IKE_FRAGMENTATION:
++	    md->fragvid = TRUE;
++	    break;
++		
+ 	default:
+ 	    break;
+ 	}
+diff -Naur openswan-2.6.32-rhel-orig/programs/pluto/vendor.h openswan-2.6.32/programs/pluto/vendor.h
+--- openswan-2.6.32-rhel-orig/programs/pluto/vendor.h	2010-12-17 20:23:54.000000000 -0500
++++ openswan-2.6.32/programs/pluto/vendor.h	2013-04-03 17:31:58.335151805 -0400
+@@ -58,6 +58,7 @@
+   VID_CISCO_IOS             =38,
+   VID_SONICWALL_1           =39,
+   VID_SONICWALL_2           =40,
++  VID_CISCO_IKE_FRAGMENTATION =41,
+ 
+ /* World of Microsoft */
+   VID_VISTA_AUTHIP	    =51,
+@@ -154,7 +155,7 @@
+   VID_MISC_XAUTH             =201,
+   VID_MISC_DPD               =202,
+   VID_MISC_HEARTBEAT_NOTIFY  =203,
+-  VID_MISC_FRAGMENTATION     =204,
++  VID_IKE_FRAGMENTATION      =204,
+   VID_INITIAL_CONTACT        =205,
+   VID_MISC_IKEv2             =206
+ 
+diff -Naur openswan-2.6.32-rhel-orig/programs/pluto/whack.c openswan-2.6.32/programs/pluto/whack.c
+--- openswan-2.6.32-rhel-orig/programs/pluto/whack.c	2013-04-03 15:32:14.632706129 -0400
++++ openswan-2.6.32/programs/pluto/whack.c	2013-04-03 17:42:15.750176505 -0400
+@@ -144,8 +144,6 @@
+ #ifdef MODECFG_DNSWINS
+ 	    " [--modecfgdns1]"
+ 	    " [--modecfgdns2]"
+-	    " [--modecfgwins1]"
+-	    " [--modecfgwins2]"
+ #endif
+ #endif
+ 	    " \\\n   "
+@@ -470,8 +468,6 @@
+     CD_OVERLAPIP,    /* can two conns that have subnet=vhost: declare the same IP? */
+     CD_MODECFGDNS1,
+     CD_MODECFGDNS2,
+-    CD_MODECFGWINS1,
+-    CD_MODECFGWINS2,
+     CD_METRIC,
+     CD_TUNNELIPV4,
+     CD_TUNNELIPV6,
+@@ -687,8 +683,6 @@
+ #ifdef MODECFG_DNSWINS
+     { "modecfgdns1", required_argument, NULL, CD_MODECFGDNS1 + OO },
+     { "modecfgdns2", required_argument, NULL, CD_MODECFGDNS2 + OO },
+-    { "modecfgwins1", required_argument, NULL, CD_MODECFGWINS1 + OO },
+-    { "modecfgwins2", required_argument, NULL, CD_MODECFGWINS2 + OO },
+     { "modeconfigserver", no_argument, NULL, END_MODECFGSERVER + OO },
+     { "modeconfigclient", no_argument, NULL, END_MODECFGCLIENT + OO },
+ #endif
+@@ -1681,17 +1675,6 @@
+ 		, &msg.modecfg_dns2), optarg);
+ 	   continue;
+ 
+-	case CD_MODECFGWINS1:
+-	   af_used_by = long_opts[long_index].name;
+-	   diagq(ttoaddr(optarg, 0, msg.addr_family
+-		, &msg.modecfg_wins1), optarg);
+-	   continue;
+-
+-	case CD_MODECFGWINS2:
+-	   af_used_by = long_opts[long_index].name;
+-	   diagq(ttoaddr(optarg, 0, msg.addr_family
+-		, &msg.modecfg_wins2), optarg);
+-	   continue;
+ #endif
+ #endif /* MODECFG */
+ 
+diff -Naur openswan-2.6.32-rhel-orig/programs/pluto/xauth.c openswan-2.6.32/programs/pluto/xauth.c
+--- openswan-2.6.32-rhel-orig/programs/pluto/xauth.c	2013-04-03 15:32:14.570705395 -0400
++++ openswan-2.6.32/programs/pluto/xauth.c	2013-04-03 17:42:51.542584135 -0400
+@@ -251,8 +251,6 @@
+ 		    get_addr(con->pamh,"IPADDR",&ia->ipaddr);
+ 		    get_addr(con->pamh,"DNS1",&ia->dns[0]);
+ 		    get_addr(con->pamh,"DNS2",&ia->dns[1]);
+-		    get_addr(con->pamh,"WINS1",&ia->wins[0]);
+-		    get_addr(con->pamh,"WINS2",&ia->wins[1]);
+ 	    }
+ #endif
+     }
+@@ -536,7 +534,7 @@
+ 			, "ModeCfg set");
+ 
+ 	/* Transmit */
+-	send_packet(st, "ModeCfg set", TRUE);
++	send_ike_msg(st, "ModeCfg set");
+ 
+ 	/* RETRANSMIT if Main, SA_REPLACE if Aggressive */
+ 	if(st->st_event->ev_type != EVENT_RETRANSMIT
+@@ -644,7 +642,7 @@
+ 
+     /* Transmit */
+ 
+-    send_packet(st, "XAUTH: req", TRUE);
++    send_ike_msg(st, "XAUTH: req");
+ 
+     /* RETRANSMIT if Main, SA_REPLACE if Aggressive */
+     if(st->st_event->ev_type != EVENT_RETRANSMIT)
+@@ -761,7 +759,7 @@
+ 
+     /* Transmit */
+ 
+-    send_packet(st, "modecfg: req", TRUE);
++    send_ike_msg(st, "modecfg: req");
+ 
+     /* RETRANSMIT if Main, SA_REPLACE if Aggressive */
+     if(st->st_event->ev_type != EVENT_RETRANSMIT)
+@@ -862,7 +860,7 @@
+ 
+     /* Transmit */
+ 
+-    send_packet(st, "XAUTH: status", TRUE);
++    send_ike_msg(st, "XAUTH: status");
+ 
+     change_state(st, STATE_XAUTH_R1);
+ 

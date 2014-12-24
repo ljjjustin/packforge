@@ -1,0 +1,15 @@
+diff -Naur openswan-2.6.32-orig/programs/pluto/crypt_dh.c openswan-2.6.32/programs/pluto/crypt_dh.c
+--- openswan-2.6.32-orig/programs/pluto/crypt_dh.c	2013-08-28 17:10:44.786743042 -0400
++++ openswan-2.6.32/programs/pluto/crypt_dh.c	2013-08-28 17:11:41.218756629 -0400
+@@ -1337,9 +1337,10 @@
+ 	PR_ASSERT(tkey1!=NULL);
+ 
+ 
++	PK11SymKey *tkey11 = NULL;
+ 	for(;;)
+ 	{
+-	   PK11SymKey *tkey11,*tkey3;;
++	   PK11SymKey *tkey3 = NULL;
+ 
+ 	   if(vpss.counter[0]== 0x01) {
+ 		PK11SymKey *tkey2 = pk11_derive_wrapper_osw(tkey1, CKM_XOR_BASE_AND_DATA

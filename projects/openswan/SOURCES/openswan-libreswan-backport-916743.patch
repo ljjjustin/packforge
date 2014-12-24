@@ -1,0 +1,18 @@
+diff -Naur openswan-2.6.32-rhel/programs/setup/setup.in openswan-2.6.32/programs/setup/setup.in
+--- openswan-2.6.32-rhel/programs/setup/setup.in	2010-12-17 20:23:54.000000000 -0500
++++ openswan-2.6.32/programs/setup/setup.in	2013-04-19 14:18:30.884775182 -0400
+@@ -77,6 +77,14 @@
+ # Does not make any sense at all to continue without the main binary
+ test -x $IPSEC_SBINDIR/ipsec || exit 5
+ 
++# This is so we can get PLUTO_* env variables - the service/systemctl
++# commands won't pass the entire environment along.
++if [ -f /etc/sysconfig/ipsec ]; then
++     . /etc/sysconfig/ipsec
++elif [ -f /etc/default/ipsec ]; then
++     . /etc/default/ipsec
++fi
++
+ # misc setup
+ umask 022
+ 

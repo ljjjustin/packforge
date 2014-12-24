@@ -1,0 +1,25 @@
+diff -urNp openswan-2.6.32-cvs-patched/programs/pluto/ikev2_child.c openswan-2.6.32-current/programs/pluto/ikev2_child.c
+--- openswan-2.6.32-cvs-patched/programs/pluto/ikev2_child.c	2011-09-01 16:58:25.410675281 -0400
++++ openswan-2.6.32-current/programs/pluto/ikev2_child.c	2011-09-27 17:20:55.462461727 -0400
+@@ -153,8 +153,8 @@ stf_status ikev2_emit_ts(struct msg_dige
+      * value and port to other end */
+ 
+     its1.isat1_ipprotoid = ts->ipprotoid;      /* protocol as per local policy*/
+-    its1.isat1_startport = htons(ts->startport);      /* ports as per local policy*/
+-    its1.isat1_endport = htons(ts->endport);  
++    its1.isat1_startport = ts->startport;      /* ports as per local policy*/
++    its1.isat1_endport = ts->endport;  
+     if(!out_struct(&its1, &ikev2_ts1_desc, &ts_pbs, &ts_pbs2))
+ 	return STF_INTERNAL_ERROR;
+     
+@@ -293,8 +293,8 @@ ikev2_parse_ts(struct payload_digest *co
+ 
+ 	    array[i].ipprotoid = ts1.isat1_ipprotoid;
+ 	    /*should be converted to host byte order for local processing*/
+-	    array[i].startport = ntohs(ts1.isat1_startport);
+-	    array[i].endport   = ntohs(ts1.isat1_endport);
++	    array[i].startport = ts1.isat1_startport;
++	    array[i].endport   = ts1.isat1_endport;
+ 	}
+     }
+     

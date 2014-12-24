@@ -1,0 +1,11 @@
+diff -Naur openswan-2.6.32-orig/programs/pluto/rnd.c openswan-2.6.32/programs/pluto/rnd.c
+--- openswan-2.6.32-orig/programs/pluto/rnd.c	2010-12-17 20:23:54.000000000 -0500
++++ openswan-2.6.32/programs/pluto/rnd.c	2013-05-02 16:52:31.415972255 -0400
+@@ -153,6 +153,7 @@
+    rv = PK11_GenerateRandom(buffer,length);
+    if(rv !=SECSuccess) {
+ 	loglog(RC_LOG_SERIOUS,"NSS RNG failed");
++	abort();
+    }
+    passert(rv==SECSuccess);
+ #else

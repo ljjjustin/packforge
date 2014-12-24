@@ -1,0 +1,26 @@
+diff -Naur openswan-2.6.32-orig/programs/pluto/plutomain.c openswan-2.6.32/programs/pluto/plutomain.c
+--- openswan-2.6.32-orig/programs/pluto/plutomain.c	2013-05-06 15:02:59.969917989 -0400
++++ openswan-2.6.32/programs/pluto/plutomain.c	2013-05-06 15:03:49.801606911 -0400
+@@ -1042,6 +1042,10 @@
+ 
+     /* loading X.509 CA certificates */
+     load_authcerts("CA cert", oco->cacerts_dir, AUTH_CA);
++#ifdef HAVE_LIBNSS
++    /*Loading CA certs from NSS DB*/
++    load_authcerts_from_nss("CA cert",  AUTH_CA);
++#endif
+     /* loading X.509 AA certificates */
+     load_authcerts("AA cert", oco->aacerts_dir, AUTH_AA);
+     /* loading X.509 OCSP certificates */
+@@ -1052,11 +1056,6 @@
+     /* loading attribute certificates (experimental) */
+     load_acerts();
+ 
+-#ifdef HAVE_LIBNSS
+-    /*Loading CA certs from NSS DB*/
+-    load_authcerts_from_nss("CA cert",  AUTH_CA);
+-#endif
+-
+ #ifdef HAVE_LABELED_IPSEC
+     init_avc();
+ #endif

@@ -1,0 +1,94 @@
+diff -urNp openswan-2.6.32-patched/programs/pluto/kernel.c openswan-2.6.32-current/programs/pluto/kernel.c
+--- openswan-2.6.32-patched/programs/pluto/kernel.c	2012-06-22 11:13:26.564890475 -0400
++++ openswan-2.6.32-current/programs/pluto/kernel.c	2012-06-22 11:21:05.249743365 -0400
+@@ -1429,6 +1429,7 @@ setup_half_ipsec_sa(struct state *st, bo
+         said_next->dst = &dst.addr;
+         said_next->src_client = &src_client;
+         said_next->dst_client = &dst_client;
++        said_next->transport_proto = c->spd.this.protocol;
+         said_next->spi = ipip_spi;
+         said_next->esatype = ET_IPIP;
+         said_next->text_said = text_said;
+@@ -1521,6 +1522,7 @@ setup_half_ipsec_sa(struct state *st, bo
+         said_next->dst = &dst.addr;
+         said_next->src_client = &src_client;
+         said_next->dst_client = &dst_client;
++        said_next->transport_proto = c->spd.this.protocol;
+         said_next->spi = ipcomp_spi;
+         said_next->esatype = ET_IPCOMP;
+         said_next->encalg = compalg;
+@@ -1745,6 +1747,7 @@ setup_half_ipsec_sa(struct state *st, bo
+         said_next->dst = &dst.addr;
+         said_next->src_client = &src_client;
+         said_next->dst_client = &dst_client;
++        said_next->transport_proto = c->spd.this.protocol;
+         said_next->spi = esp_spi;
+         said_next->esatype = ET_ESP;
+         said_next->replay_window = kernel_ops->replay_window;
+@@ -1886,6 +1889,7 @@ setup_half_ipsec_sa(struct state *st, bo
+         said_next->dst = &dst.addr;
+         said_next->src_client = &src_client;
+         said_next->dst_client = &dst_client;
++        said_next->transport_proto = c->spd.this.protocol;
+         said_next->spi = ah_spi;
+         said_next->esatype = ET_AH;
+         said_next->replay_window = kernel_ops->replay_window;
+diff -urNp openswan-2.6.32-patched/programs/pluto/kernel.h openswan-2.6.32-current/programs/pluto/kernel.h
+--- openswan-2.6.32-patched/programs/pluto/kernel.h	2012-06-22 11:13:26.562890475 -0400
++++ openswan-2.6.32-current/programs/pluto/kernel.h	2012-06-22 11:21:35.468733341 -0400
+@@ -79,6 +79,7 @@ struct kernel_sa {
+ 
+ 	ipsec_spi_t spi;
+ 	unsigned proto;
++	unsigned int transport_proto;
+ 	enum eroute_type esatype;
+ 	unsigned replay_window;
+ 	unsigned reqid;
+diff -urNp openswan-2.6.32-patched/programs/pluto/kernel_netlink.c openswan-2.6.32-current/programs/pluto/kernel_netlink.c
+--- openswan-2.6.32-patched/programs/pluto/kernel_netlink.c	2012-06-22 11:13:26.563890475 -0400
++++ openswan-2.6.32-current/programs/pluto/kernel_netlink.c	2012-06-22 11:24:26.910692113 -0400
+@@ -814,6 +814,44 @@ netlink_add_sa(struct kernel_sa *sa, boo
+     else
+     {
+ 	req.p.mode = XFRM_MODE_TRANSPORT;
++
++	req.p.sel.sport = portof(&sa->src_client->addr);
++	req.p.sel.dport = portof(&sa->dst_client->addr);
++
++	/* As per RFC 4301/5996, icmp type is put in the most significant 8 bits
++	* and icmp code is in the least significant 8 bits of port field. 
++	* Although Openswan does not have any configuration options for 
++	* icmp type/code values, it is possible to specify icmp type and code 
++	* using protoport option. For example, icmp echo request (type 8/code 0) 
++	* needs to be encoded as 0x0800 in the port field and can be specified 
++	* as left/rightprotoport=icmp/2048. Now with NETKEY, icmp type and code
++	* need to be passed as source and destination ports, respectively.
++	* therefore, this code extracts upper 8 bits and lower 8 bits and puts
++	* into source and destination ports before passing to NETKEY. */
++
++
++	if( 1 == sa->transport_proto /*icmp*/ || 58 == sa->transport_proto /*ipv6-icmp*/) {
++
++	u_int16_t icmp_type;
++	u_int16_t icmp_code;
++
++	icmp_type = ntohs(req.p.sel.sport) >> 8;
++	icmp_code = ntohs(req.p.sel.sport) & 0xFF;
++
++	req.p.sel.sport = htons(icmp_type);
++	req.p.sel.dport = htons(icmp_code);
++
++	}
++
++	req.p.sel.sport_mask = (req.p.sel.sport) ? ~0:0;
++	req.p.sel.dport_mask = (req.p.sel.dport) ? ~0:0;
++	ip2xfrm(&sa->src_client->addr, &req.p.sel.saddr);
++	ip2xfrm(&sa->dst_client->addr, &req.p.sel.daddr);
++	req.p.sel.prefixlen_s = sa->src_client->maskbits;
++	req.p.sel.prefixlen_d = sa->dst_client->maskbits;
++	req.p.sel.proto = sa->transport_proto;
++	req.p.sel.family = sa->src_client->addr.u.v4.sin_family;
++
+     }
+ 
+     req.p.replay_window = sa->replay_window > 32 ? 32 : sa->replay_window; 

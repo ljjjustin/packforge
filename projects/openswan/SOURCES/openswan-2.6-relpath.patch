@@ -1,0 +1,24 @@
+diff -urNp openswan-2.6.32-orig/Makefile.inc openswan-2.6.32-cvs-patched/Makefile.inc
+--- openswan-2.6.32-orig/Makefile.inc	2010-12-20 12:44:19.113079987 -0500
++++ openswan-2.6.32-cvs-patched/Makefile.inc	2010-12-20 12:51:03.383330043 -0500
+@@ -123,6 +123,8 @@ FINALRCDIR?=$(shell for d in $(INC_RCDIR
+ 		do if test -d $(DESTDIR)/$$d ; \
+ 		then echo $$d ; exit 0 ; \
+ 		fi ; done ; echo $(INC_RCDEFAULT) )
++# this needs to be a relative path from BINDIR
++RELFINALRCDIR?=../../..$(FINALRCDIR)
+ RCDIR?=$(DESTDIR)$(FINALRCDIR)
+ 
+ 
+diff -urNp openswan-2.6.32-orig/programs/setup/Makefile openswan-2.6.32-cvs-patched/programs/setup/Makefile
+--- openswan-2.6.32-orig/programs/setup/Makefile	2010-12-20 12:44:19.124080258 -0500
++++ openswan-2.6.32-cvs-patched/programs/setup/Makefile	2010-12-20 12:51:46.128322171 -0500
+@@ -37,7 +37,7 @@ doinstall:: $(PROGRAM) $(CONFFILES) $(EX
+ 	@mkdir -p $(RCDIR) $(BINDIR)
+ 	# install and link everything
+ 	@$(INSTALL) $(INSTBINFLAGS) setup $(RCDIR)/ipsec
+-	@ln -s $(FINALRCDIR)/ipsec $(BINDIR)/setup
++	@ln -s $(RELFINALRCDIR)/ipsec $(BINDIR)/setup
+ 
+ install_file_list::
+ 	@echo $(RCDIR)/ipsec

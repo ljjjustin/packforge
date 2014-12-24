@@ -1,0 +1,186 @@
+diff -Naur openswan-2.6.32-orig/include/oid.h openswan-2.6.32/include/oid.h
+--- openswan-2.6.32-orig/include/oid.h	2010-12-17 20:23:54.000000000 -0500
++++ openswan-2.6.32/include/oid.h	2013-08-13 13:47:41.730216075 -0400
+@@ -5,6 +5,7 @@
+  * Do not edit manually!
+  */
+ 
++#include <sys/types.h>
+ typedef struct {
+     u_char octet;
+     u_int  next;
+@@ -31,6 +32,7 @@
+ #define OID_SHA256_WITH_RSA		63
+ #define OID_SHA384_WITH_RSA		64
+ #define OID_SHA512_WITH_RSA		65
++#define OID_SHA224_WITH_RSA		66
+ #define OID_PKCS7_DATA			67
+ #define OID_PKCS7_SIGNED_DATA		68
+ #define OID_PKCS9_EMAIL			74
+@@ -52,3 +54,6 @@
+ #define OID_SERVICE_LOCATOR		119
+ #define OID_SHA1			123
+ #define OID_SHA1_WITH_RSA_OIW		124
++#define OID_SHA256			140
++#define OID_SHA384			141
++#define OID_SHA512			142
+diff -Naur openswan-2.6.32-orig/lib/libopenswan/alg_info.c openswan-2.6.32/lib/libopenswan/alg_info.c
+--- openswan-2.6.32-orig/lib/libopenswan/alg_info.c	2010-12-17 20:23:54.000000000 -0500
++++ openswan-2.6.32/lib/libopenswan/alg_info.c	2013-08-13 13:47:41.731216086 -0400
+@@ -87,9 +87,9 @@
+     case IKEv2_AUTH_HMAC_SHA2_256_128: 
+ 	return AUTH_ALGORITHM_HMAC_SHA2_256;
+     case IKEv2_AUTH_HMAC_SHA2_384_192: 
+-	return AUTH_ALGORITHM_HMAC_SHA2_256;
++	return AUTH_ALGORITHM_HMAC_SHA2_384;
+     case IKEv2_AUTH_HMAC_SHA2_512_256: 
+-	return AUTH_ALGORITHM_HMAC_SHA2_256;
++	return AUTH_ALGORITHM_HMAC_SHA2_512;
+ 
+     /* invalid or not yet supported */
+     case IKEv2_AUTH_DES_MAC:
+diff -Naur openswan-2.6.32-orig/lib/libopenswan/Makefile openswan-2.6.32/lib/libopenswan/Makefile
+--- openswan-2.6.32-orig/lib/libopenswan/Makefile	2013-08-13 13:47:11.746881527 -0400
++++ openswan-2.6.32/lib/libopenswan/Makefile	2013-08-13 13:47:41.731216086 -0400
+@@ -54,6 +54,10 @@
+ PFKEYV2_SRCS+=pfkey_v2_debug.c 
+ endif
+ 
++# always add SHA2 support
++CFLAGS+=-DUSE_SHA2
++CFLAGS+=-I${OPENSWANSRCDIR}/lib/libcrypto/libsha2
++
+ LOGSRCS=oswlog.c oswid.c
+ 
+ 
+diff -Naur openswan-2.6.32-orig/lib/libopenswan/oid.c openswan-2.6.32/lib/libopenswan/oid.c
+--- openswan-2.6.32-orig/lib/libopenswan/oid.c	2010-12-17 20:23:54.000000000 -0500
++++ openswan-2.6.32/lib/libopenswan/oid.c	2013-08-13 13:47:41.731216086 -0400
+@@ -6,7 +6,6 @@
+  */
+ 
+ #include <stdlib.h>
+-#include <sys/types.h>
+ 
+ #include "oid.h"
+ 
+diff -Naur openswan-2.6.32-orig/lib/libopenswan/oid.txt openswan-2.6.32/lib/libopenswan/oid.txt
+--- openswan-2.6.32-orig/lib/libopenswan/oid.txt	2010-12-17 20:23:54.000000000 -0500
++++ openswan-2.6.32/lib/libopenswan/oid.txt	2013-08-13 13:47:41.731216086 -0400
+@@ -64,6 +64,7 @@
+                 0x0B         "sha256WithRSAEncryption"	OID_SHA256_WITH_RSA
+                 0x0C         "sha384WithRSAEncryption"	OID_SHA384_WITH_RSA
+                 0x0D         "sha512WithRSAEncryption"	OID_SHA512_WITH_RSA
++                0x0E         "sha224WithRSAEncryption"	OID_SHA224_WITH_RSA
+               0x07           "PKCS-7"
+                 0x01         "data"			OID_PKCS7_DATA
+                 0x02         "signedData"		OID_PKCS7_SIGNED_DATA
+diff -Naur openswan-2.6.32-orig/lib/libopenswan/x509dn.c openswan-2.6.32/lib/libopenswan/x509dn.c
+--- openswan-2.6.32-orig/lib/libopenswan/x509dn.c	2013-08-13 13:47:12.027884662 -0400
++++ openswan-2.6.32/lib/libopenswan/x509dn.c	2013-08-13 13:47:41.732216097 -0400
+@@ -1270,7 +1270,7 @@
+ 	    digest->len = SHA1_DIGEST_SIZE;
+ 	    return TRUE;
+ 	}
+-#ifdef SHA2
++#ifdef USE_SHA2
+ 	case OID_SHA256:
+ 	case OID_SHA256_WITH_RSA:
+ 	{
+@@ -1299,12 +1299,12 @@
+ #ifdef HAVE_LIBNSS
+ 	   unsigned int len;
+ 	   SECStatus s;
+-	   s = PK11_DigestOp(ctx.ctx_nss, tbs.ptr, tbs.len);
++	   s = PK11_DigestOp(context.ctx_nss, tbs.ptr, tbs.len);
+ 	   passert(s==SECSuccess);
+-	   s=PK11_DigestFinal(ctx.ctx_nss, digest->ptr, &len, SHA2_384_DIGEST_SIZE);
++	   s=PK11_DigestFinal(context.ctx_nss, digest->ptr, &len, SHA2_384_DIGEST_SIZE);
+ 	   passert(len==SHA2_384_DIGEST_SIZE);
+ 	   passert(s==SECSuccess);
+-	   PK11_DestroyContext(ctx.ctx_nss, PR_TRUE);
++	   PK11_DestroyContext(context.ctx_nss, PR_TRUE);
+ #else
+ 	   sha512_write(&context, tbs.ptr, tbs.len);
+ 	   sha512_final(&context);
+@@ -1359,6 +1359,7 @@
+ 	case OID_SHA256_WITH_RSA:
+ 	case OID_SHA384_WITH_RSA:
+ 	case OID_SHA512_WITH_RSA:
++	case OID_SHA224_WITH_RSA:
+ 	{
+ 
+ 	   SECKEYPublicKey *publicKey;
+diff -Naur openswan-2.6.32-orig/Makefile.inc openswan-2.6.32/Makefile.inc
+--- openswan-2.6.32-orig/Makefile.inc	2013-08-13 13:47:11.747881538 -0400
++++ openswan-2.6.32/Makefile.inc	2013-08-13 13:47:41.732216097 -0400
+@@ -536,10 +536,10 @@
+ LIBTWOFISH=${OBJDIRTOP}/lib/libcrypto/libtwofish/libtwofish.a
+ LIBSERPENT=${OBJDIRTOP}/lib/libcrypto/libserpent/libserpent.a
+ LIBSHA2=${OBJDIRTOP}/lib/libcrypto/libsha2/libsha2.a
+-CRYPTOLIBS=${LIBAES} ${LIBSHA1} ${LIBMD5} ${LIBMD2} ${LIBDESLITE}
++CRYPTOLIBS=${LIBAES} ${LIBSHA1} ${LIBMD5} ${LIBMD2} ${LIBDESLITE} ${LIBSHA2}
+ 
+ ifeq ($(USE_EXTRACRYPTO),true)
+-CRYPTOLIBS+=${LIBSHA2} ${LIBSERPENT} ${LIBTWOFISH} ${LIBBLOWFISH}
++CRYPTOLIBS+=${LIBSERPENT} ${LIBTWOFISH} ${LIBBLOWFISH}
+ endif
+ 
+ CRYPTOLIBS += ${LIBOSWCRYPTO}
+diff -Naur openswan-2.6.32-orig/programs/pluto/Makefile openswan-2.6.32/programs/pluto/Makefile
+--- openswan-2.6.32-orig/programs/pluto/Makefile	2013-08-13 13:47:11.758881661 -0400
++++ openswan-2.6.32/programs/pluto/Makefile	2013-08-13 13:47:41.732216097 -0400
+@@ -111,7 +111,7 @@
+ 	ike_alg_aes.c ike_alginit.c ikev2_rsa.c ikev2_psk.c ikev2_x509.c \
+ 	rcv_whack.c rcv_whack.h \
+ 	$(IPSECPOLICY_DIST_SRCS) \
+-	${EXTRA_CRYPTO_SRCS} \
++	${EXTRA_CRYPTO_SRCS} ike_alg_sha2.c \
+ 	log.c log.h \
+ 	plutomain.c plutoalg.c \
+ 	ocsp.c ocsp.h \
+@@ -158,7 +158,7 @@
+ OBJSPLUTO += rnd.o spdb.o spdb_struct.o spdb_v1_struct.o spdb_print.o security_selinux.o
+ OBJSPLUTO += vendor.o nat_traversal.o virtual.o 
+ OBJSPLUTO += ike_alg_aes.o ike_alginit.o ikev2_rsa.o ikev2_psk.o ikev2_x509.o
+-OBJSPLUTO += ${EXTRA_CRYPTO_OBJS}
++OBJSPLUTO += ${EXTRA_CRYPTO_OBJS} ike_alg_sha2.o
+ OBJSPLUTO += ike_alg.o ike_alg_status.o db_ops.o 
+ OBJSPLUTO += ${XAUTH_OBJS}
+ OBJSPLUTO += ${AGGRESSIVE_OBJS}
+diff -Naur openswan-2.6.32-orig/programs/pluto/Makefile.options openswan-2.6.32/programs/pluto/Makefile.options
+--- openswan-2.6.32-orig/programs/pluto/Makefile.options	2013-08-13 13:47:11.883883055 -0400
++++ openswan-2.6.32/programs/pluto/Makefile.options	2013-08-13 13:48:08.031509695 -0400
+@@ -250,10 +250,10 @@
+ endif
+ 
+ ifeq ($(USE_EXTRACRYPTO),true)
+-EXTRA_CRYPTO_DEFS=-DUSE_TWOFISH -DUSE_BLOWFISH -DUSE_SERPENT -DUSE_SHA2
+-EXTRA_CRYPTO_SRCS=ike_alg_blowfish.c ike_alg_twofish.c ike_alg_serpent.c ike_alg_sha2.c 
+-EXTRA_CRYPTO_OBJS=ike_alg_blowfish.o ike_alg_twofish.o ike_alg_serpent.o ike_alg_sha2.o 
+-EXTRA_CRYPTO_LIBS=$(LIBBLOWFISH) $(LIBTWOFISH) $(LIBSERPENT) $(LIBSHA2) 
++EXTRA_CRYPTO_DEFS=-DUSE_TWOFISH -DUSE_BLOWFISH -DUSE_SERPENT
++EXTRA_CRYPTO_SRCS=ike_alg_blowfish.c ike_alg_twofish.c ike_alg_serpent.c
++EXTRA_CRYPTO_OBJS=ike_alg_blowfish.o ike_alg_twofish.o ike_alg_serpent.o
++EXTRA_CRYPTO_LIBS=$(LIBBLOWFISH) $(LIBTWOFISH) $(LIBSERPENT)
+ endif
+ 
+ ifeq ($(USE_SINGLE_CONF_DIR),true)
+@@ -284,7 +284,7 @@
+ 	${KLIPS_DEFS} ${WIN2K_DEFS} ${TPM_DEFS} ${MAST_DEFS} ${BSDKAME_DEFS} \
+ 	-DBUILDER=\"${BUILDER}\" \
+ 	-DDEBUG \
+-	-DUSE_AES -DUSE_3DES \
++	-DUSE_AES -DUSE_3DES -DUSE_SHA2 \
+ 	-DIKE_ALG -DKERNEL_ALG \
+ 	${AGGRESSIVE_DEFS} \
+ 	${XAUTH_DEFS} ${XAUTHPAM_DEFS} \
+@@ -305,7 +305,7 @@
+ LIBSPLUTO+=$(IPSECPOLICY_LIBS) $(X509_LIBS) 
+ LIBSPLUTO+=$(HAVE_THREADS_LIBS)
+ LIBSPLUTO+=${CURL_LIBS} ${TPM_LIBS}
+-LIBSPLUTO+=${EXTRA_CRYPTO_LIBS} ${WHACKLIB} ${PLUTOLIB} ${BSDKAME_LIBS}
++LIBSPLUTO+=${EXTRA_CRYPTO_LIBS} $(LIBSHA2) ${WHACKLIB} ${PLUTOLIB} ${BSDKAME_LIBS}
+ PLUTOMINUSL+= ${X509_LLIBS} ${CURL_LLIBS} ${TPM_LLIBS} ${HAVE_THREADS_LLIBS} 
+ PLUTOMINUSL+= ${XAUTH_LLIBS} ${XAUTHPAM_LIBS}
+ PLUTOMINUSL+= ${OPENSSL_LIBS} ${LIBCRYPT} -lgmp # -lefence

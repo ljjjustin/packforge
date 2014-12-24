@@ -1,0 +1,68 @@
+diff -urNp openswan-2.6.32-patched/lib/libopenswan/constants.c openswan-2.6.32-current/lib/libopenswan/constants.c
+--- openswan-2.6.32-patched/lib/libopenswan/constants.c	2012-04-20 03:15:49.417911082 -0400
++++ openswan-2.6.32-current/lib/libopenswan/constants.c	2012-04-30 03:43:11.238640125 -0400
+@@ -38,6 +38,21 @@ static const char *const version_name_1[
+ };
+ static const char *const version_name_2[] = {
+ 	"IKEv2 version 2.0 (rfc4306)",
++	"IKEv2 version 2.0 (rfc4306)",
++	"IKEv2 version 2.0 (rfc4306)",
++	"IKEv2 version 2.0 (rfc4306)",
++	"IKEv2 version 2.0 (rfc4306)",
++	"IKEv2 version 2.0 (rfc4306)",
++	"IKEv2 version 2.0 (rfc4306)",
++	"IKEv2 version 2.0 (rfc4306)",
++	"IKEv2 version 2.0 (rfc4306)",
++	"IKEv2 version 2.0 (rfc4306)",
++	"IKEv2 version 2.0 (rfc4306)",
++	"IKEv2 version 2.0 (rfc4306)",
++	"IKEv2 version 2.0 (rfc4306)",
++	"IKEv2 version 2.0 (rfc4306)",
++	"IKEv2 version 2.0 (rfc4306)",
++	"IKEv2 version 2.0 (rfc4306)",
+ };
+ 
+ enum_names version_names_1 =
+@@ -45,9 +60,10 @@ enum_names version_names_1 =
+ 	ISAKMP_MAJOR_VERSION<<ISA_MAJ_SHIFT | ISAKMP_MINOR_VERSION,
+ 	version_name_1, NULL };
+ 
++/* To ignore or (in other words, accept) all IKEv2 minor versions*/
+ enum_names version_names =
+-    { IKEv2_MAJOR_VERSION<<ISA_MAJ_SHIFT | IKEv2_MINOR_VERSION,
+-	IKEv2_MAJOR_VERSION<<ISA_MAJ_SHIFT | IKEv2_MINOR_VERSION,
++    { IKEv2_MAJOR_VERSION<<ISA_MAJ_SHIFT | 0x0,
++	IKEv2_MAJOR_VERSION<<ISA_MAJ_SHIFT | 0xf,
+ 	version_name_2, &version_names_1 };
+ 
+ /* Domain of Interpretation */
+diff -urNp openswan-2.6.32-patched/programs/pluto/ikev2_parent.c openswan-2.6.32-current/programs/pluto/ikev2_parent.c
+--- openswan-2.6.32-patched/programs/pluto/ikev2_parent.c	2012-04-18 12:06:37.188244233 -0400
++++ openswan-2.6.32-current/programs/pluto/ikev2_parent.c	2012-04-30 08:11:50.697350143 -0400
+@@ -734,6 +734,8 @@ ikev2_parent_inI1outR1_tail(struct pluto
+     {
+ 	struct isakmp_hdr r_hdr = md->hdr;
+ 
++	r_hdr.isa_version = IKEv2_MAJOR_VERSION << ISA_MAJ_SHIFT | IKEv2_MINOR_VERSION;
++
+ 	memcpy(r_hdr.isa_rcookie, st->st_rcookie, COOKIE_SIZE);
+ 	r_hdr.isa_np = ISAKMP_NEXT_v2SA;
+ 	r_hdr.isa_flags &= ~ISAKMP_FLAGS_I;
+@@ -1313,6 +1315,8 @@ ikev2_parent_inR1outI2_tail(struct pluto
+     {
+ 	struct isakmp_hdr r_hdr = md->hdr;
+ 
++	r_hdr.isa_version = IKEv2_MAJOR_VERSION << ISA_MAJ_SHIFT | IKEv2_MINOR_VERSION;
++
+ 	r_hdr.isa_np    = ISAKMP_NEXT_v2E;
+ 	r_hdr.isa_xchg  = ISAKMP_v2_AUTH;
+ 	r_hdr.isa_flags = ISAKMP_FLAGS_I;
+@@ -1735,6 +1739,8 @@ ikev2_parent_inI2outR2_tail(struct pluto
+ 	/* HDR out */
+ 	{
+ 	    struct isakmp_hdr r_hdr = md->hdr;
++
++	    r_hdr.isa_version = IKEv2_MAJOR_VERSION << ISA_MAJ_SHIFT | IKEv2_MINOR_VERSION;
+ 	    
+ 	    r_hdr.isa_np    = ISAKMP_NEXT_v2E;
+ 	    r_hdr.isa_xchg  = ISAKMP_v2_AUTH;

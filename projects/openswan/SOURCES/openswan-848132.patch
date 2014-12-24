@@ -1,0 +1,22 @@
+commit 22f498701b923dc980e1477797cb21dd75d6459a
+Author: Avesh Agarwal <avagarwa@redhat.com>
+Date:   Thu Dec 6 09:30:04 2012 -0500
+
+    * DPD: dpdaction=restart can cause full phase1 timeout after DPD
+      (rhbz#848132)
+    
+    Signed-off-by: Paul Wouters <paul@libreswan.org>
+
+diff --git a/programs/pluto/timer.c b/programs/pluto/timer.c
+index 4fa088f..43b3b75 100644
+--- a/programs/pluto/timer.c
++++ b/programs/pluto/timer.c
+@@ -542,7 +542,7 @@ handle_next_timer_event(void)
+ 		newest = (IS_PHASE1(st->st_state) || IS_PHASE15(st->st_state ))
+ 		    ? c->newest_isakmp_sa : c->newest_ipsec_sa;
+ 
+-		if (newest != st->st_serialno
++		if (newest > st->st_serialno
+ 		&& newest != SOS_NOBODY)
+ 		{
+ 		    /* not very interesting: no need to replace */

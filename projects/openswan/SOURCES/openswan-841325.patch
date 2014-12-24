@@ -1,0 +1,220 @@
+diff -Naur openswan-2.6.32-orig/include/pluto_constants.h openswan-2.6.32/include/pluto_constants.h
+--- openswan-2.6.32-orig/include/pluto_constants.h	2013-04-27 13:52:44.230269959 -0400
++++ openswan-2.6.32/include/pluto_constants.h	2013-04-27 13:59:34.201772319 -0400
+@@ -325,7 +325,11 @@
+ #define ISAKMP_SA_ESTABLISHED_STATES  (LELEM(STATE_MAIN_R3) | \
+ 				       LELEM(STATE_MAIN_I4) | \
+ 				       LELEM(STATE_AGGR_I2) | \
+-				       LELEM(STATE_AGGR_R2))
++				       LELEM(STATE_AGGR_R2) | \
++				       LELEM(STATE_XAUTH_R0) | LELEM(STATE_XAUTH_R1)| \
++				       LELEM(STATE_MODE_CFG_R0) | LELEM(STATE_MODE_CFG_R1) | \
++				       LELEM(STATE_MODE_CFG_R2) | LELEM(STATE_MODE_CFG_I1) | \
++				       LELEM(STATE_XAUTH_I0) | LELEM(STATE_XAUTH_I1))
+ 
+ #define IS_PHASE1_INIT(s)         ((s) == STATE_MAIN_I1 \
+ 				   || (s) == STATE_MAIN_I2 \
+@@ -333,7 +337,9 @@
+ 				   || (s) == STATE_MAIN_I4 \
+ 				   || (s) == STATE_AGGR_I1 \
+ 				   || (s) == STATE_AGGR_I2 \
+-				   || (s) == STATE_AGGR_R2)
++				   || (s) == STATE_XAUTH_I0 \
++				   || (s) == STATE_XAUTH_I1 \
++				   || (s) == STATE_MODE_CFG_I1)
+ #define IS_PHASE1(s) (STATE_MAIN_R0 <= (s) && (s) <= STATE_AGGR_R2)
+ #define IS_PHASE15(s) (STATE_XAUTH_R0 <= (s) && (s) <= STATE_XAUTH_I1)
+ #define IS_QUICK(s) (STATE_QUICK_R0 <= (s) && (s) <= STATE_QUICK_R2)
+@@ -343,7 +349,7 @@
+ 				  || (s) == STATE_AGGR_I2 || (s) == STATE_AGGR_R2 \
+ 				  || (s) == STATE_XAUTH_R0 || (s) == STATE_XAUTH_R1 \
+ 				  || (s) == STATE_MODE_CFG_R0 || (s) == STATE_MODE_CFG_R1 \
+-				  || (s) == STATE_MODE_CFG_R2 \
++				  || (s) == STATE_MODE_CFG_R2 || (s) == STATE_MODE_CFG_I1 \
+                                   || (s) == STATE_XAUTH_I0 || (s) == STATE_XAUTH_I1)
+ #define IS_IPSEC_SA_ESTABLISHED(s) ((s) == STATE_QUICK_I2 || (s) == STATE_QUICK_R2)
+ #define IS_ONLY_INBOUND_IPSEC_SA_ESTABLISHED(s) ((s) == STATE_QUICK_R1)
+diff -Naur openswan-2.6.32-orig/programs/pluto/dpd.c openswan-2.6.32/programs/pluto/dpd.c
+--- openswan-2.6.32-orig/programs/pluto/dpd.c	2013-04-27 13:52:44.118268476 -0400
++++ openswan-2.6.32/programs/pluto/dpd.c	2013-04-27 13:59:34.201772319 -0400
+@@ -372,7 +372,7 @@
+ {
+     if(st==NULL) return;
+ 
+-    if(IS_PHASE1(st->st_state)) {
++    if(IS_PHASE1(st->st_state) || IS_PHASE15(st->st_state )) {
+ 	p1_dpd_outI1(st);
+     } else {
+ 	p2_dpd_outI1(st);
+diff -Naur openswan-2.6.32-orig/programs/pluto/ikev1.c openswan-2.6.32/programs/pluto/ikev1.c
+--- openswan-2.6.32-orig/programs/pluto/ikev1.c	2013-04-27 13:52:44.236270038 -0400
++++ openswan-2.6.32/programs/pluto/ikev1.c	2013-04-27 13:59:34.202772332 -0400
+@@ -1738,7 +1738,7 @@
+ 		switch (np)
+ 		{
+ 		case ISAKMP_NEXT_ID:
+-		    sd = IS_PHASE1(from_state)
++		    sd = (IS_PHASE1(from_state) || IS_PHASE15(from_state))
+ 			? &isakmp_identification_desc : &isakmp_ipsec_identification_desc;
+ 		    break;
+ 
+@@ -1854,7 +1854,7 @@
+ 
+     /* more sanity checking: enforce most ordering constraints */
+ 
+-    if (IS_PHASE1(from_state))
++    if (IS_PHASE1(from_state) || IS_PHASE15(from_state))
+     {
+ 	/* rfc2409: The Internet Key Exchange (IKE), 5 Exchanges:
+ 	 * "The SA payload MUST precede all other payloads in a phase 1 exchange."
+@@ -2216,7 +2216,7 @@
+ 		    break;
+ 
+ 		case EVENT_SA_REPLACE:	/* SA replacement event */
+-		    if (IS_PHASE1(st->st_state))
++		    if (IS_PHASE1(st->st_state) || IS_PHASE15(st->st_state ))
+ 		    {
+ 			/* Note: we will defer to the "negotiated" (dictated)
+ 			 * lifetime if we are POLICY_DONT_REKEY.
+diff -Naur openswan-2.6.32-orig/programs/pluto/ikev1_main.c openswan-2.6.32/programs/pluto/ikev1_main.c
+--- openswan-2.6.32-orig/programs/pluto/ikev1_main.c	2013-04-27 13:52:44.253270263 -0400
++++ openswan-2.6.32/programs/pluto/ikev1_main.c	2013-04-27 13:59:34.203772346 -0400
+@@ -2306,6 +2306,21 @@
+     st->st_ph1_iv_len = st->st_new_iv_len;
+     set_ph1_iv(st, st->st_new_iv);
+ 
++    /* It seems as per Cisco implementation, XAUTH and MODECFG 
++     * are not supposed to be performed again during rekey */
++    if(st->st_connection->newest_isakmp_sa != SOS_NOBODY &&
++        st->st_connection->spd.this.xauth_client) {
++           DBG(DBG_CONTROL, DBG_log("Skipping XAUTH for rekey for Cisco Peer compatibility."));
++           st->hidden_variables.st_xauth_client_done = TRUE;
++           st->st_oakley.xauth = 0;
++
++           if(st->st_connection->spd.this.modecfg_client) {
++                DBG(DBG_CONTROL, DBG_log("Skipping ModeCFG for rekey for Cisco Peer compatibility."));
++                st->hidden_variables.st_modecfg_vars_set = TRUE;
++                st->hidden_variables.st_modecfg_started = TRUE;
++           }
++    }
++
+     ISAKMP_SA_established(st->st_connection, st->st_serialno);
+ 
+     /* ??? If st->st_connectionc->gw_info != NULL,
+@@ -2363,6 +2378,21 @@
+      */
+     memcpy(st->st_ph1_iv, st->st_new_iv, st->st_new_iv_len);
+     st->st_ph1_iv_len = st->st_new_iv_len;
++
++    /* It seems as per Cisco implementation, XAUTH and MODECFG 
++     * are not supposed to be performed again during rekey */
++    if(st->st_connection->newest_isakmp_sa != SOS_NOBODY &&
++        st->st_connection->spd.this.xauth_client) {
++           DBG(DBG_CONTROL, DBG_log("Skipping XAUTH for rekey for Cisco Peer compatibility."));
++           st->hidden_variables.st_xauth_client_done = TRUE;
++           st->st_oakley.xauth = 0;
++
++           if(st->st_connection->spd.this.modecfg_client) {
++                DBG(DBG_CONTROL, DBG_log("Skipping ModeCFG for rekey for Cisco Peer compatibility."));
++                st->hidden_variables.st_modecfg_vars_set = TRUE;
++                st->hidden_variables.st_modecfg_started = TRUE;
++           }
++    }
+     
+     ISAKMP_SA_established(st->st_connection, st->st_serialno);
+ 
+diff -Naur openswan-2.6.32-orig/programs/pluto/nat_traversal.c openswan-2.6.32/programs/pluto/nat_traversal.c
+--- openswan-2.6.32-orig/programs/pluto/nat_traversal.c	2013-04-27 13:52:44.247270184 -0400
++++ openswan-2.6.32/programs/pluto/nat_traversal.c	2013-04-27 14:03:29.257935790 -0400
+@@ -800,10 +800,7 @@
+ 		DBG(DBG_NATT,DBG_log("Sending of NAT-T KEEP-ALIVE forced by global configuration (force_keepalive=yes)"));
+ 	}
+ 
+-	if ( ((st->st_state == STATE_MAIN_R3)
+-	      || (st->st_state == STATE_MAIN_I4)
+-	      || (st->st_state == STATE_AGGR_R2)
+-	      || (st->st_state == STATE_AGGR_I2))
++	 if ( IS_ISAKMP_SA_ESTABLISHED(st->st_state)
+ 	     &&	(st->hidden_variables.st_nat_traversal & NAT_T_DETECTED)
+ 	     &&	((st->hidden_variables.st_nat_traversal & LELEM(NAT_TRAVERSAL_NAT_BHND_ME))
+ 		 || (_force_ka)))
+@@ -821,10 +818,7 @@
+ 		struct state *st_newest;
+ 		st_newest = state_with_serialno(c->newest_isakmp_sa);
+ 		if ((st_newest)
+-		    && ((st_newest->st_state==STATE_MAIN_R3)
+-			|| (st_newest->st_state==STATE_MAIN_I4)
+-			|| (st_newest->st_state == STATE_AGGR_R2)
+-			|| (st_newest->st_state == STATE_AGGR_I2))
++		    && IS_ISAKMP_SA_ESTABLISHED(st->st_state)
+ 		    && (st_newest->hidden_variables.st_nat_traversal & NAT_T_DETECTED)
+ 		    && ((st_newest->hidden_variables.st_nat_traversal & LELEM(NAT_TRAVERSAL_NAT_BHND_ME))
+ 			|| (_force_ka)))
+diff -Naur openswan-2.6.32-orig/programs/pluto/state.c openswan-2.6.32/programs/pluto/state.c
+--- openswan-2.6.32-orig/programs/pluto/state.c	2013-04-27 13:52:44.239270078 -0400
++++ openswan-2.6.32/programs/pluto/state.c	2013-04-27 13:59:34.205772373 -0400
+@@ -925,7 +925,7 @@
+ 		DBG_log("comparing %s to %s\n", ra, peerstr);
+ 
+ 		if(sameaddr(&this->st_remoteaddr, peer)) {
+-		    if(ph1==0 && IS_PHASE1(this->st_state)) {
++		    if(ph1==0 && (IS_PHASE1(this->st_state) || IS_PHASE15(st->st_state ))) {
+ 			
+ 			whack_log(RC_COMMENT
+ 				  , "peer %s for connection %s crashed, replacing"
+@@ -1651,7 +1651,7 @@
+ 		whack_log(RC_COMMENT, "%s", state_buf2);
+ 
+ 	  /* show any associated pending Phase 2s */
+-	  if (IS_PHASE1(st->st_state))
++	  if (IS_PHASE1(st->st_state) || IS_PHASE15(st->st_state ))
+ 		show_pending_phase2(st->st_connection, st);
+ 	}
+ 
+diff -Naur openswan-2.6.32-orig/programs/pluto/timer.c openswan-2.6.32/programs/pluto/timer.c
+--- openswan-2.6.32-orig/programs/pluto/timer.c	2013-04-27 13:52:44.240270091 -0400
++++ openswan-2.6.32/programs/pluto/timer.c	2013-04-27 13:59:34.205772373 -0400
+@@ -527,7 +527,7 @@
+ 
+ 		passert(st != NULL);
+ 		c = st->st_connection;
+-		newest = IS_PHASE1(st->st_state)
++		newest = (IS_PHASE1(st->st_state) || IS_PHASE15(st->st_state ))
+ 		    ? c->newest_isakmp_sa : c->newest_ipsec_sa;
+ 
+ 		if (newest != st->st_serialno
+@@ -536,7 +536,7 @@
+ 		    /* not very interesting: no need to replace */
+ 		    DBG(DBG_LIFECYCLE
+ 			, openswan_log("not replacing stale %s SA: #%lu will do"
+-			    , IS_PHASE1(st->st_state)? "ISAKMP" : "IPsec"
++			    , (IS_PHASE1(st->st_state) || IS_PHASE15(st->st_state ))? "ISAKMP" : "IPsec"
+ 			    , newest));
+ 		}
+ 		else if (type == EVENT_SA_REPLACE_IF_USED
+@@ -561,14 +561,14 @@
+ 		     */
+ 		    DBG(DBG_LIFECYCLE
+ 			, openswan_log("not replacing stale %s SA: inactive for %lus"
+-			    , IS_PHASE1(st->st_state)? "ISAKMP" : "IPsec"
++			    , (IS_PHASE1(st->st_state) || IS_PHASE15(st->st_state ))? "ISAKMP" : "IPsec"
+ 			    , (unsigned long)(tm - st->st_outbound_time)));
+ 		}
+ 		else
+ 		{
+ 		    DBG(DBG_LIFECYCLE
+ 			, openswan_log("replacing stale %s SA"
+-			    , IS_PHASE1(st->st_state)? "ISAKMP" : "IPsec"));
++			    , (IS_PHASE1(st->st_state)|| IS_PHASE15(st->st_state ))? "ISAKMP" : "IPsec"));
+ 		    ipsecdoi_replace(st, LEMPTY, LEMPTY, 1);
+ 		}
+ 		delete_dpd_event(st);
+@@ -585,7 +585,7 @@
+ 		passert(st != NULL);
+ 		c = st->st_connection;
+ 
+-		if (IS_PHASE1(st->st_state))
++		if (IS_PHASE1(st->st_state)|| IS_PHASE15(st->st_state ))
+ 		{
+ 		    satype = "ISAKMP";
+ 		    latest = c->newest_isakmp_sa;

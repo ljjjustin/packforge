@@ -1,0 +1,2655 @@
+diff -urNp openswan-2.6.32-cvs-patched/include/ietf_constants.h openswan-2.6.32-current/include/ietf_constants.h
+--- openswan-2.6.32-cvs-patched/include/ietf_constants.h	2011-03-02 10:22:56.450538841 -0500
++++ openswan-2.6.32-current/include/ietf_constants.h	2011-02-22 11:31:38.578262005 -0500
+@@ -710,6 +710,8 @@ enum ikev1_ipsec_attr {
+ 	KEY_ROUNDS              =7,
+ 	COMPRESS_DICT_SIZE      =8,
+ 	COMPRESS_PRIVATE_ALG    =9,	/* B/V */
++	ECN_TUNNEL              =10,	/*B*/ /*RFC 3168*/
++	SECCTX                  =32001,    /* B/V */ /*chosen from private range as in RFC 2407*/
+ };
+ 
+ /* for each IPsec attribute, which enum_names describes its values? */
+diff -urNp openswan-2.6.32-cvs-patched/include/ipsecconf/confread.h openswan-2.6.32-current/include/ipsecconf/confread.h
+--- openswan-2.6.32-cvs-patched/include/ipsecconf/confread.h	2011-03-02 10:22:56.434543755 -0500
++++ openswan-2.6.32-current/include/ipsecconf/confread.h	2011-02-22 11:31:38.575262943 -0500
+@@ -107,6 +107,7 @@ struct starter_conn {
+ 
+ 	char *esp;
+ 	char *ike;
++	char *policy_label;
+ };
+ 
+ struct starter_config {
+diff -urNp openswan-2.6.32-cvs-patched/include/ipsecconf/keywords.h openswan-2.6.32-current/include/ipsecconf/keywords.h
+--- openswan-2.6.32-cvs-patched/include/ipsecconf/keywords.h	2011-03-02 10:22:56.438527299 -0500
++++ openswan-2.6.32-current/include/ipsecconf/keywords.h	2011-02-22 11:31:38.575262943 -0500
+@@ -53,6 +53,7 @@ enum keyword_string_config_field {
+     KSF_ACCELERATION,
+     KSF_CONNALIAS,
+     KSF_LISTEN,
++    KSF_POLICY_LABEL,
+     KSF_MAX
+ };
+ 
+@@ -104,8 +105,11 @@ enum keyword_numeric_config_field {
+     KBF_OVERLAPIP,
+     KBF_REMOTEPEERTYPE, /*Cisco interop: remote peer type*/
+     KBF_NMCONFIGURED, /*Network Manager support*/
++    KBF_LOOPBACK,
++    KBF_LABELED_IPSEC,
+     KBF_SAREFTRACK, /* saref tracking paramter for _updown */
+     KBF_WARNIGNORE, /* to ignore obsoleted keywords */
++    KBF_SECCTX, /*security context attribute value for labeled ipsec*/
+     KBF_MAX         
+ };
+ 
+diff -urNp openswan-2.6.32-cvs-patched/include/names_constant.h openswan-2.6.32-current/include/names_constant.h
+--- openswan-2.6.32-cvs-patched/include/names_constant.h	2011-03-02 10:22:56.447527209 -0500
++++ openswan-2.6.32-current/include/names_constant.h	2011-02-22 11:31:38.577261875 -0500
+@@ -75,6 +75,10 @@ extern const unsigned int ikev2_transid_
+ extern enum_names ikev2_cert_type_names;
+ extern enum_names ikev2_notify_names;
+ 
++#ifdef HAVE_LABELED_IPSEC
++extern u_int16_t secctx_attr_value;
++#endif
++
+ /* socket address family info */
+ 
+ struct af_info
+diff -urNp openswan-2.6.32-cvs-patched/include/pluto_constants.h openswan-2.6.32-current/include/pluto_constants.h
+--- openswan-2.6.32-cvs-patched/include/pluto_constants.h	2011-03-02 10:22:56.449537873 -0500
++++ openswan-2.6.32-current/include/pluto_constants.h	2011-02-22 11:31:38.577261875 -0500
+@@ -54,6 +54,16 @@ enum keyword_nmconfigured {
+     YES = 1,
+ };
+ 
++enum keyword_loopback {
++    LB_NO = 0,
++    LB_YES = 1,
++};
++
++enum keyword_labeled_ipsec {
++    LI_NO = 0,
++    LI_YES = 1,
++};
++
+ /* Timer events */
+ 
+ enum event_type {
+@@ -526,6 +536,7 @@ enum pluto_policy {
+ #define KEY_ROUNDS               7
+ #define COMPRESS_DICT_SIZE       8
+ #define COMPRESS_PRIVATE_ALG     9	/* B/V */
++#define SECCTX                   32001     /* B/V */
+ 
+ /* for each IPsec attribute, which enum_names describes its values? */
+ 
+diff -urNp openswan-2.6.32-cvs-patched/include/whack.h openswan-2.6.32-current/include/whack.h
+--- openswan-2.6.32-cvs-patched/include/whack.h	2011-03-02 10:22:56.451537783 -0500
++++ openswan-2.6.32-current/include/whack.h	2011-02-22 11:31:38.578262005 -0500
+@@ -135,6 +135,10 @@ struct whack_message {
+     /*Checking if this connection is configured by Network Manager*/
+     enum keyword_nmconfigured nmconfigured;
+ 
++    enum keyword_loopback loopback;
++    enum keyword_labeled_ipsec labeled_ipsec;
++    char *policy_label;
++
+     /*  note that each end contains string 2/5.id, string 3/6 cert,
+      *  and string 4/7 updown
+      */
+diff -urNp openswan-2.6.32-cvs-patched/lib/libipsecconf/confread.c openswan-2.6.32-current/lib/libipsecconf/confread.c
+--- openswan-2.6.32-cvs-patched/lib/libipsecconf/confread.c	2011-03-02 10:22:56.912529364 -0500
++++ openswan-2.6.32-current/lib/libipsecconf/confread.c	2011-02-22 11:31:38.609262054 -0500
+@@ -80,6 +80,11 @@ void ipsecconf_default_values(struct sta
+ #ifdef HAVE_NM
+ 	cfg->conn_default.options[KBF_NMCONFIGURED] = NO;
+ #endif
++
++#ifdef HAVE_LABELED_IPSEC
++	cfg->conn_default.options[KBF_LOOPBACK] = LB_NO;
++	cfg->conn_default.options[KBF_LABELED_IPSEC] = LI_NO;
++#endif
+ 	cfg->conn_default.policy = POLICY_RSASIG|POLICY_TUNNEL|POLICY_ENCRYPT|POLICY_PFS;
+ 	cfg->conn_default.policy |= POLICY_IKEV2_ALLOW; /* ikev2=yes */
+ 	cfg->conn_default.policy |= POLICY_SAREF_TRACK;  /* sareftrack=yes */
+@@ -1032,6 +1037,13 @@ static int load_conn (struct starter_con
+ 	conn->esp = xstrdup(conn->strings[KSF_ESP]);
+     }
+ 
++#ifdef HAVE_LABELED_IPSEC
++    if(conn->strings_set[KSF_POLICY_LABEL]) {
++        conn->policy_label = xstrdup(conn->strings[KSF_POLICY_LABEL]);
++    }
++    starter_log(LOG_LEVEL_DEBUG,"connection's  policy label: %s", conn->policy_label);
++#endif
++
+     if(conn->strings_set[KSF_IKE]) {
+ 	conn->ike = xstrdup(conn->strings[KSF_IKE]);
+     }
+@@ -1139,7 +1151,9 @@ void conn_default (char *n, struct start
+     
+     CONN_STR(conn->esp);
+     CONN_STR(conn->ike);
+-
++#ifdef HAVE_LABELED_IPSEC
++    CONN_STR(conn->policy_label);
++#endif
+     conn->policy = def->policy;
+ #undef CONN_STR
+ }
+diff -urNp openswan-2.6.32-cvs-patched/lib/libipsecconf/keywords.c openswan-2.6.32-current/lib/libipsecconf/keywords.c
+--- openswan-2.6.32-cvs-patched/lib/libipsecconf/keywords.c	2011-03-02 10:22:56.907531230 -0500
++++ openswan-2.6.32-current/lib/libipsecconf/keywords.c	2011-02-22 11:31:38.608261854 -0500
+@@ -212,6 +212,25 @@ struct keyword_enum_values kw_nm_configu
+     { kw_nm_configured_list, sizeof(kw_nm_configured_list)/sizeof(struct keyword_enum_value)};
+ #endif
+ 
++#ifdef HAVE_LABELED_IPSEC
++struct keyword_enum_value kw_loopback_list[]={
++    { "yes",         LB_YES },
++    { "no",         LB_NO },
++};
++
++struct keyword_enum_values kw_loopback=
++    { kw_loopback_list, sizeof(kw_loopback_list)/sizeof(struct keyword_enum_value)};
++
++
++struct keyword_enum_value kw_labeled_ipsec_list[]={
++    { "yes",         LI_YES },
++    { "no",         LI_NO },
++};
++
++struct keyword_enum_values kw_labeled_ipsec=
++    { kw_labeled_ipsec_list, sizeof(kw_labeled_ipsec_list)/sizeof(struct keyword_enum_value)};
++#endif
++
+ /*
+  * Values for right= and left=
+  */
+@@ -338,7 +357,9 @@ struct keyword_def ipsec_conf_keywords_v
+     {"listen",     kv_config, kt_string, KSF_LISTEN,NOT_ENUM},
+     {"protostack",     kv_config, kt_string,    KSF_PROTOSTACK, &kw_proto_stack},
+     {"nhelpers",kv_config,kt_number, KBF_NHELPERS, NOT_ENUM},
+-
++#ifdef HAVE_LABELED_IPSEC
++    {"secctx_attr_value",kv_config,kt_number, KBF_SECCTX, NOT_ENUM},
++#endif
+     /* these two options are obsoleted. Don't die on them */
+     {"forwardcontrol", kv_config, kt_obsolete, KBF_WARNIGNORE,NOT_ENUM},
+     {"rp_filter",      kv_config, kt_obsolete, KBF_WARNIGNORE,NOT_ENUM},
+@@ -380,6 +401,11 @@ struct keyword_def ipsec_conf_keywords_v
+     {"keylife",        kv_conn|kv_auto|kv_alias, kt_time,   KBF_SALIFETIME,NOT_ENUM},
+     {"lifetime",       kv_conn|kv_auto|kv_alias, kt_time,   KBF_SALIFETIME,NOT_ENUM},
+     {"salifetime",     kv_conn|kv_auto, kt_time,   KBF_SALIFETIME,NOT_ENUM},
++#ifdef HAVE_LABELED_IPSEC
++    {"loopback",       kv_conn|kv_auto, kt_enum, KBF_LOOPBACK, &kw_loopback},
++    {"labeled_ipsec",   kv_conn|kv_auto, kt_enum, KBF_LABELED_IPSEC, &kw_labeled_ipsec},
++    {"policy_label",    kv_conn|kv_auto,         kt_string, KSF_POLICY_LABEL, NOT_ENUM},
++#endif
+ 
+     /* Cisco interop: remote peer type*/
+     {"remote_peer_type", kv_conn|kv_auto, kt_enum, KBF_REMOTEPEERTYPE, &kw_remote_peer_type},
+diff -urNp openswan-2.6.32-cvs-patched/lib/libipsecconf/Makefile openswan-2.6.32-current/lib/libipsecconf/Makefile
+--- openswan-2.6.32-cvs-patched/lib/libipsecconf/Makefile	2011-03-02 10:22:56.909529744 -0500
++++ openswan-2.6.32-current/lib/libipsecconf/Makefile	2011-02-22 11:31:38.609262054 -0500
+@@ -40,6 +40,10 @@ ifeq ($(USE_NM),true)
+ CFLAGS+=-DHAVE_NM
+ endif
+ 
++ifeq ($(USE_LABELED_IPSEC),true)
++CFLAGS+=-DHAVE_LABELED_IPSEC
++endif
++
+ ifeq ($(USE_KLIPS),true)
+ SRCS+=virtif.c
+ endif
+diff -urNp openswan-2.6.32-cvs-patched/lib/libipsecconf/starterwhack.c openswan-2.6.32-current/lib/libipsecconf/starterwhack.c
+--- openswan-2.6.32-cvs-patched/lib/libipsecconf/starterwhack.c	2011-03-02 10:22:56.913531938 -0500
++++ openswan-2.6.32-current/lib/libipsecconf/starterwhack.c	2011-02-22 11:31:38.609262054 -0500
+@@ -528,6 +528,20 @@ static int starter_whack_basic_add_conn(
+ 	}
+ #endif
+ 
++
++#ifdef HAVE_LABELED_IPSEC
++	/*Labeled ipsec support*/
++	if(conn->options_set[KBF_LOOPBACK]) {
++		msg.loopback=conn->options[KBF_LOOPBACK];
++	}
++
++        if(conn->options_set[KBF_LABELED_IPSEC]) {
++                msg.labeled_ipsec=conn->options[KBF_LABELED_IPSEC];
++        }
++
++	msg.policy_label = conn->policy_label;
++#endif
++
+ 	set_whack_end(cfg, "left",  &msg.left, &conn->left);
+ 	set_whack_end(cfg, "right", &msg.right, &conn->right);
+ 
+diff -urNp openswan-2.6.32-cvs-patched/lib/libopenswan/constants.c openswan-2.6.32-current/lib/libopenswan/constants.c
+--- openswan-2.6.32-cvs-patched/lib/libopenswan/constants.c	2011-03-02 10:22:56.753529315 -0500
++++ openswan-2.6.32-current/lib/libopenswan/constants.c	2011-02-22 11:31:38.607261725 -0500
+@@ -489,6 +489,9 @@ static const char *const ipsec_attr_name
+ 	"KEY_ROUNDS",
+ 	"COMPRESS_DICT_SIZE",
+ 	"COMPRESS_PRIVATE_ALG",
++#ifdef HAVE_LABELED_IPSEC
++	"ECN_TUNNEL",
++#endif
+     };
+ 
+ static const char *const ipsec_var_attr_name[] = {
+@@ -500,16 +503,54 @@ static const char *const ipsec_var_attr_
+ 	NULL,
+ 	NULL,
+ 	"COMPRESS_PRIVATE_ALG (variable length)",
++#ifdef HAVE_LABELED_IPSEC
++	"NULL", /*ECN TUNNEL*/
++#endif
+     };
+ 
++#ifdef HAVE_LABELED_IPSEC
++static const char *const ipsec_private_attr_name[] = {
++	"SECCTX" /*32001*/
++};
++
++enum_names ipsec_private_attr_names_tv = {
++  SECCTX + ISAKMP_ATTR_AF_TV, SECCTX + ISAKMP_ATTR_AF_TV, ipsec_private_attr_name, NULL};
++
++enum_names ipsec_private_attr_names = {
++  SECCTX, SECCTX, ipsec_private_attr_name, &ipsec_private_attr_names_tv};
++#endif
++
+ static enum_names ipsec_attr_desc_tv = {
+     SA_LIFE_TYPE + ISAKMP_ATTR_AF_TV,
++#ifdef HAVE_LABELED_IPSEC
++    ECN_TUNNEL + ISAKMP_ATTR_AF_TV,
++#else
+     COMPRESS_PRIVATE_ALG + ISAKMP_ATTR_AF_TV,
+-    ipsec_attr_name, NULL };
++#endif
++    ipsec_attr_name,
++#ifdef HAVE_LABELED_IPSEC
++    &ipsec_private_attr_names};
++#else
++    NULL };
++#endif
+ 
+ enum_names ipsec_attr_names = {
+-    SA_LIFE_DURATION, COMPRESS_PRIVATE_ALG,
+-    ipsec_var_attr_name, &ipsec_attr_desc_tv };
++#ifdef HAVE_LABELED_IPSEC
++    SA_LIFE_TYPE,
++#else
++    SA_LIFE_DURATION,
++#endif
++#ifdef HAVE_LABELED_IPSEC
++    ECN_TUNNEL,
++#else
++    COMPRESS_PRIVATE_ALG,
++#endif
++#ifdef HAVE_LABELED_IPSEC
++    ipsec_attr_name,
++#else
++     ipsec_var_attr_name,
++#endif
++      &ipsec_attr_desc_tv };
+ 
+ /* for each IPsec attribute, which enum_names describes its values? */
+ enum_names *ipsec_attr_val_descs[] = {
+@@ -523,6 +564,9 @@ enum_names *ipsec_attr_val_descs[] = {
+ 	NULL,			/* KEY_ROUNDS */
+ 	NULL,			/* COMPRESS_DICT_SIZE */
+ 	NULL,			/* COMPRESS_PRIVATE_ALG */
++#ifdef HAVE_LABELED_IPSEC
++	NULL,			/*ECN_TUNNEL*/
++#endif
+     };
+ const unsigned int ipsec_attr_val_descs_size=elemsof(ipsec_attr_val_descs);
+ 
+diff -urNp openswan-2.6.32-cvs-patched/lib/libopenswan/Makefile openswan-2.6.32-current/lib/libopenswan/Makefile
+--- openswan-2.6.32-cvs-patched/lib/libopenswan/Makefile	2011-03-02 10:22:56.716529064 -0500
++++ openswan-2.6.32-current/lib/libopenswan/Makefile	2011-02-22 11:31:38.602261982 -0500
+@@ -107,6 +107,10 @@ ifeq ($(USE_MODP_RFC5114),true)
+ CFLAGS+=-DUSE_MODP_RFC5114
+ endif
+ 
++ifeq ($(USE_LABELED_IPSEC),true)
++CFLAGS+=-DHAVE_LABELED_IPSEC
++endif
++
+ CFLAGS+=-DFINALCONFDIR=\"${FINALCONFDIR}\"
+ CFLAGS+=-DFINALCONFDDIR=\"${FINALCONFDDIR}\"
+ CFLAGS+=-DFINALCONFFILE=\"${FINALCONFFILE}\"
+diff -urNp openswan-2.6.32-cvs-patched/lib/libwhack/Makefile openswan-2.6.32-current/lib/libwhack/Makefile
+--- openswan-2.6.32-cvs-patched/lib/libwhack/Makefile	2011-03-02 10:22:56.901543095 -0500
++++ openswan-2.6.32-current/lib/libwhack/Makefile	2011-02-22 11:31:38.608261854 -0500
+@@ -57,6 +57,10 @@ ifeq ($(USE_NAT_TRAVERSAL),true)
+ CFLAGS+= -DNAT_TRAVERSAL
+ endif
+ 
++ifeq ($(USE_LABELED_IPSEC),true)
++CFLAGS+= -DHAVE_LABELED_IPSEC
++endif
++
+ ifeq ($(USE_DYNAMICDNS),true)
+ CFLAGS+= -DDYNAMICDNS
+ endif
+diff -urNp openswan-2.6.32-cvs-patched/lib/libwhack/whacklib.c openswan-2.6.32-current/lib/libwhack/whacklib.c
+--- openswan-2.6.32-cvs-patched/lib/libwhack/whacklib.c	2011-03-02 10:22:56.902531771 -0500
++++ openswan-2.6.32-current/lib/libwhack/whacklib.c	2011-02-22 11:31:38.608261854 -0500
+@@ -145,6 +145,9 @@ err_t pack_whack_msg (struct whackpacker
+ 	|| !pack_str(wp, &wp->msg->string2)                /* string 25 */
+ 	|| !pack_str(wp, &wp->msg->string3)                /* string 26 */
+ 	|| !pack_str(wp, &wp->msg->dnshostname) /* string 27 ? */
++#ifdef HAVE_LABELED_IPSEC
++	|| !pack_str(wp, &wp->msg->policy_label) /* string 28 */
++#endif
+ 	|| wp->str_roof - wp->str_next < (ptrdiff_t)wp->msg->keyval.len)    /* chunk (sort of string 19) */
+     {
+ 	ugh = "too many bytes of strings to fit in message to pluto";
+@@ -204,6 +207,9 @@ err_t unpack_whack_msg (struct whackpack
+ 	|| !unpack_str(wp, &wp->msg->string2)                /* string 25 */
+ 	|| !unpack_str(wp, &wp->msg->string3)                /* string 26 */
+ 	|| !unpack_str(wp, &wp->msg->dnshostname)  /* string 27 ? */
++#ifdef HAVE_LABELED_IPSEC
++	|| !unpack_str(wp, &wp->msg->policy_label) /* string 28 */
++#endif
+ 	|| wp->str_roof - wp->str_next != (ptrdiff_t)wp->msg->keyval.len)	/* check chunk */
+     {
+ 	ugh = "message from whack contains bad string";
+diff -urNp openswan-2.6.32-cvs-patched/Makefile.inc openswan-2.6.32-current/Makefile.inc
+--- openswan-2.6.32-cvs-patched/Makefile.inc	2011-03-02 10:23:29.275529598 -0500
++++ openswan-2.6.32-current/Makefile.inc	2011-02-22 11:31:38.431262031 -0500
+@@ -362,6 +362,9 @@ ifeq ($(USE_FIPSCHECK),true)
+ USE_LIBNSS?=true
+ endif
+ 
++#Enable Labeled IPSec Functionality
++USE_LABELED_IPSEC?=false
++
+ # Support for LIBCAP-NG to drop unneeded capabilities for the pluto daemon
+ USE_LIBCAP_NG?=false
+ 
+diff -urNp openswan-2.6.32-cvs-patched/Makefile.top openswan-2.6.32-current/Makefile.top
+--- openswan-2.6.32-cvs-patched/Makefile.top	2011-03-02 10:22:53.408532467 -0500
++++ openswan-2.6.32-current/Makefile.top	2011-02-22 11:31:38.431262031 -0500
+@@ -110,5 +110,5 @@ export USE_WEAKSTUFF USE_NOCRYPTO USE_EX
+ export USE_TAPROOM USE_OBJDIR
+ export HAVE_STATSD USE_DYNAMICDNS
+ export USE_IPSEC_CONNECTION_LIMIT IPSEC_CONNECTION_LIMIT
+-export USE_LIBNSS USE_FIPSCHECK USE_MODP_RFC5114 USE_NM
++export USE_LIBNSS USE_FIPSCHECK USE_MODP_RFC5114 USE_NM USE_LABELED_IPSEC
+ export USE_MAST USE_SAREF_KERNEL
+diff -urNp openswan-2.6.32-cvs-patched/programs/pluto/connections.c openswan-2.6.32-current/programs/pluto/connections.c
+--- openswan-2.6.32-cvs-patched/programs/pluto/connections.c	2011-03-02 10:22:53.994544069 -0500
++++ openswan-2.6.32-current/programs/pluto/connections.c	2011-02-22 11:31:38.453261958 -0500
+@@ -324,6 +324,9 @@ delete_connection(struct connection *c, 
+     pfreeany(c->cisco_domain_info);
+     pfreeany(c->cisco_banner);
+ #endif
++#ifdef HAVE_LABELED_IPSEC
++    pfreeany(c->policy_label);
++#endif
+ #ifdef DYNAMICDNS
+     pfreeany(c->dnshostname);
+ #endif /* DYNAMICDNS */
+@@ -1337,6 +1340,16 @@ add_connection(const struct whack_messag
+ 	c->nmconfigured=wm->nmconfigured;
+ #endif
+ 
++#ifdef HAVE_LABELED_IPSEC
++	c->loopback  = wm->loopback;
++	c->labeled_ipsec = wm->labeled_ipsec;
++	c->policy_label = NULL;
++	if(wm->policy_label) {
++	c->policy_label = clone_str(wm->policy_label, "security label");
++	}
++	DBG(DBG_CONTROL, DBG_log("loopback=%d labeled_ipsec=%d, policy_label=%s", c->loopback, c->labeled_ipsec, c->policy_label));
++#endif
++
+ 	c->metric = wm->metric;
+ 
+ 	c->forceencaps = wm->forceencaps;
+diff -urNp openswan-2.6.32-cvs-patched/programs/pluto/connections.h openswan-2.6.32-current/programs/pluto/connections.h
+--- openswan-2.6.32-cvs-patched/programs/pluto/connections.h	2011-03-02 10:22:54.222532098 -0500
++++ openswan-2.6.32-current/programs/pluto/connections.h	2011-02-22 11:31:38.461261881 -0500
+@@ -209,6 +209,12 @@ struct connection {
+ #ifdef HAVE_NM
+     enum keyword_nmconfigured nmconfigured;
+ #endif
++
++#ifdef HAVE_LABELED_IPSEC
++   enum keyword_loopback loopback;
++   enum keyword_labeled_ipsec labeled_ipsec;
++   char *policy_label;
++#endif
+     
+     bool               forceencaps;         /* always use NAT-T encap */
+     
+@@ -298,11 +304,20 @@ extern void initiate_connection(const ch
+ 				, lset_t moredebug
+ 				, enum crypto_importance importance);
+ extern void restart_connections_by_peer(struct connection *c);
++
++#ifdef HAVE_LABELED_IPSEC
++struct xfrm_user_sec_ctx_ike; /* forward declaration */
++#endif
++
+ extern int initiate_ondemand(const ip_address *our_client
+-			      , const ip_address *peer_client
+-			      , int transport_proto
+-			      , bool held
+-			      , int whackfd, err_t why);
++                              , const ip_address *peer_client
++                              , int transport_proto
++                              , bool held
++                              , int whackfd
++#ifdef HAVE_LABELED_IPSEC
++                              , struct xfrm_user_sec_ctx_ike *uctx
++#endif
++                              , err_t why);
+ extern void terminate_connection(const char *nm);
+ extern void release_connection(struct connection *c, bool relations);
+ extern void delete_connection(struct connection *c, bool relations);
+@@ -395,7 +410,11 @@ extern void add_pending(int whack_sock
+     , struct connection *c
+     , lset_t policy
+     , unsigned long try
+-    , so_serial_t replacing);
++    , so_serial_t replacing
++#ifdef HAVE_LABELED_IPSEC
++    , struct xfrm_user_sec_ctx_ike * uctx
++#endif
++    );
+ 
+ extern void release_pending_whacks(struct state *st, err_t story);
+ extern void unpend(struct state *st);
+diff -urNp openswan-2.6.32-cvs-patched/programs/pluto/dpd.c openswan-2.6.32-current/programs/pluto/dpd.c
+--- openswan-2.6.32-cvs-patched/programs/pluto/dpd.c	2011-03-02 10:22:54.196808168 -0500
++++ openswan-2.6.32-current/programs/pluto/dpd.c	2011-02-22 11:31:38.459261831 -0500
+@@ -130,6 +130,12 @@ dpd_init(struct state *st)
+     /**
+      * Used to store the 1st state 
+      */
++#ifdef HAVE_LABELED_IPSEC
++	if(st->st_connection->loopback){
++	openswan_log("dpd is not required for ipsec connections over loopback");
++	return STF_OK;
++	}
++#endif
+     struct state *p1st;
+ 
+     /* find the related Phase 1 state */
+diff -urNp openswan-2.6.32-cvs-patched/programs/pluto/ikev1_aggr.c openswan-2.6.32-current/programs/pluto/ikev1_aggr.c
+--- openswan-2.6.32-cvs-patched/programs/pluto/ikev1_aggr.c	2011-03-02 10:24:36.294530847 -0500
++++ openswan-2.6.32-current/programs/pluto/ikev1_aggr.c	2011-02-22 11:31:38.459261831 -0500
+@@ -981,7 +981,11 @@ aggr_outI1(int whack_sock,
+ 	   struct state *predecessor,
+ 	   lset_t policy,
+ 	   unsigned long try
+-	   , enum crypto_importance importance)
++	   , enum crypto_importance importance
++#ifdef HAVE_LABELED_IPSEC
++           , struct xfrm_user_sec_ctx_ike * uctx
++#endif	   
++	   )
+ {
+     struct state *st;
+     struct spd_route *sr;
+@@ -989,6 +993,9 @@ aggr_outI1(int whack_sock,
+     /* set up new state */
+     cur_state = st = new_state();
+     st->st_connection = c;
++#ifdef HAVE_LABELED_IPSEC
++    st->sec_ctx = NULL;
++#endif
+     set_state_ike_endpoints(st, c);
+ 
+ #ifdef DEBUG
+@@ -1028,7 +1035,11 @@ aggr_outI1(int whack_sock,
+ 
+     if (HAS_IPSEC_POLICY(policy))
+ 	add_pending(dup_any(whack_sock), st, c, policy, 1
+-	    , predecessor == NULL? SOS_NOBODY : predecessor->st_serialno);
++	    , predecessor == NULL? SOS_NOBODY : predecessor->st_serialno
++#ifdef HAVE_LABELED_IPSEC
++	     , uctx
++#endif
++		   );
+ 
+     if (predecessor == NULL) {
+ 	openswan_log("initiating Aggressive Mode #%lu, connection \"%s\""
+diff -urNp openswan-2.6.32-cvs-patched/programs/pluto/ikev1.c openswan-2.6.32-current/programs/pluto/ikev1.c
+--- openswan-2.6.32-cvs-patched/programs/pluto/ikev1.c	2011-03-02 10:24:03.959779963 -0500
++++ openswan-2.6.32-current/programs/pluto/ikev1.c	2011-02-22 11:31:38.464261781 -0500
+@@ -889,6 +889,21 @@ process_v1_packet(struct msg_digest **md
+ 	    st = find_state_ikev1(md->hdr.isa_icookie, md->hdr.isa_rcookie
+ 		, &md->sender, md->hdr.isa_msgid);
+ 
++#ifdef HAVE_LABELED_IPSEC
++	    if(st != NULL && st->st_connection->loopback) {
++		DBG(DBG_CONTROL, DBG_log("loopback scenario: verifying if this is really a correct state, if not, find the correct state"));
++		
++		st = find_state_ikev1_loopback(md->hdr.isa_icookie, md->hdr.isa_rcookie
++						, &md->sender, md->hdr.isa_msgid, md);
++		if (st != NULL) {
++		DBG(DBG_CONTROL, DBG_log("loopback scenario: found a correct state for the received message"));
++		}
++		else {
++		DBG(DBG_CONTROL, DBG_log("loopback scenario: did not found any state, perhaps a first message from the responder"));
++		}
++	    }
++#endif
++
+ 	    if (st == NULL)
+ 	    {
+ 		/* perhaps this is a first message from the responder
+@@ -1014,6 +1029,21 @@ process_v1_packet(struct msg_digest **md
+ 	st = find_state_ikev1(md->hdr.isa_icookie, md->hdr.isa_rcookie
+ 	    , &md->sender, md->hdr.isa_msgid);
+ 
++#ifdef HAVE_LABELED_IPSEC
++	if(st != NULL && st->st_connection->loopback) {
++	   DBG(DBG_CONTROL,  DBG_log("loopback scenario: verifying if this is really a correct state, if not, find the correct state"));
++
++	   st = find_state_ikev1_loopback(md->hdr.isa_icookie, md->hdr.isa_rcookie
++                , &md->sender, md->hdr.isa_msgid, md);
++
++		if (st != NULL) {
++		DBG(DBG_CONTROL, DBG_log("loopback scenario: found a correct state for the received message"));
++		}
++		else {
++		DBG(DBG_CONTROL, DBG_log("loopback scenario: did not found any state, perhaps a first message from the responder"));
++		}
++            }
++#endif
+ 	if (st == NULL)
+ 	{
+ 	    /* No appropriate Quick Mode state.
+@@ -2259,7 +2289,11 @@ complete_v1_state_transition(struct msg_
+ 	    {
+ 		change_state(st, STATE_MAIN_R3);    /* ISAKMP is up... */
+ 	        set_cur_state(st);
+-	        quick_outI1(st->st_whack_sock, st, st->st_connection, st->st_connection->policy, 1, SOS_NOBODY);
++	        quick_outI1(st->st_whack_sock, st, st->st_connection, st->st_connection->policy, 1, SOS_NOBODY
++#ifdef HAVE_LABELED_IPSEC
++                               , NULL /* Setting NULL as this is responder and will not have sec ctx from a flow*/
++#endif
++			   );
+ 		break;
+ 	    }	    
+ 
+diff -urNp openswan-2.6.32-cvs-patched/programs/pluto/ikev1_continuations.h openswan-2.6.32-current/programs/pluto/ikev1_continuations.h
+--- openswan-2.6.32-cvs-patched/programs/pluto/ikev1_continuations.h	2011-03-02 10:22:54.263541177 -0500
++++ openswan-2.6.32-current/programs/pluto/ikev1_continuations.h	2011-02-22 11:31:38.464261781 -0500
+@@ -18,7 +18,11 @@ typedef stf_status initiator_function(in
+ 				      , struct state *predecessor
+ 				      , lset_t policy
+ 				      , unsigned long try
+-				      , enum crypto_importance importance);
++				      , enum crypto_importance importance
++#ifdef HAVE_LABELED_IPSEC
++				      , struct xfrm_user_sec_ctx_ike * uctx
++#endif
++					);
+ 
+ /* MAGIC: perform f, a function that returns notification_t
+  * and return from the ENCLOSING stf_status returning function if it fails.
+diff -urNp openswan-2.6.32-cvs-patched/programs/pluto/ikev1.h openswan-2.6.32-current/programs/pluto/ikev1.h
+--- openswan-2.6.32-cvs-patched/programs/pluto/ikev1.h	2011-03-02 10:24:03.960779813 -0500
++++ openswan-2.6.32-current/programs/pluto/ikev1.h	2011-02-22 11:31:38.455261939 -0500
+@@ -46,14 +46,22 @@ extern stf_status main_outI1(int whack_s
+ 			     , struct state *predecessor
+ 			     , lset_t policy
+ 			     , unsigned long try
+-			     , enum crypto_importance importance);
++			     , enum crypto_importance importance
++#ifdef HAVE_LABELED_IPSEC
++                             , struct xfrm_user_sec_ctx_ike * uctx
++#endif
++			     );
+ 
+ extern stf_status aggr_outI1(int whack_sock,
+ 			     struct connection *c,
+ 			     struct state *predecessor,
+ 			     lset_t policy,
+ 			     unsigned long try
+-			     , enum crypto_importance importance);
++			     , enum crypto_importance importance
++#ifdef HAVE_LABELED_IPSEC
++			     , struct xfrm_user_sec_ctx_ike * uctx
++#endif 
++			     );
+ 
+ extern stf_status aggr_not_present(int whack_sock,
+ 			     struct connection *c,
+diff -urNp openswan-2.6.32-cvs-patched/programs/pluto/ikev1_main.c openswan-2.6.32-current/programs/pluto/ikev1_main.c
+--- openswan-2.6.32-cvs-patched/programs/pluto/ikev1_main.c	2011-03-02 10:24:36.297529420 -0500
++++ openswan-2.6.32-current/programs/pluto/ikev1_main.c	2011-02-22 11:31:38.462261801 -0500
+@@ -109,7 +109,11 @@ main_outI1(int whack_sock
+ 	   , struct state *predecessor
+ 	   , lset_t policy
+ 	   , unsigned long try
+-	   , enum crypto_importance importance)
++	   , enum crypto_importance importance
++#ifdef HAVE_LABELED_IPSEC
++	   , struct xfrm_user_sec_ctx_ike * uctx
++#endif
++	   )
+ {
+     struct state *st = new_state();
+     struct msg_digest md;   /* use reply/rbody found inside */
+@@ -136,7 +140,16 @@ main_outI1(int whack_sock
+ 
+     if (HAS_IPSEC_POLICY(policy))
+ 	add_pending(dup_any(whack_sock), st, c, policy, 1
+-	    , predecessor == NULL? SOS_NOBODY : predecessor->st_serialno);
++	    , predecessor == NULL? SOS_NOBODY : predecessor->st_serialno
++#ifdef HAVE_LABELED_IPSEC
++	    , uctx
++#endif
++		   );
++
++#ifdef HAVE_LABELED_IPSEC
++    /*For main modes states, sec ctx is always null*/
++    st->sec_ctx = NULL;
++#endif
+ 
+     if (predecessor == NULL)
+ 	openswan_log("initiating Main Mode");
+diff -urNp openswan-2.6.32-cvs-patched/programs/pluto/ikev1_quick.c openswan-2.6.32-current/programs/pluto/ikev1_quick.c
+--- openswan-2.6.32-cvs-patched/programs/pluto/ikev1_quick.c	2011-03-02 10:22:54.024529933 -0500
++++ openswan-2.6.32-current/programs/pluto/ikev1_quick.c	2011-02-22 11:31:38.453261958 -0500
+@@ -743,7 +743,11 @@ quick_outI1(int whack_sock
+ 	    , struct connection *c
+ 	    , lset_t policy
+ 	    , unsigned long try
+-	    , so_serial_t replacing)
++	    , so_serial_t replacing
++#ifdef HAVE_LABELED_IPSEC
++	    , struct xfrm_user_sec_ctx_ike * uctx
++#endif
++	    )
+ {
+     struct state *st = duplicate_state(isakmp_sa);
+     struct qke_continuation *qke = alloc_thing(struct qke_continuation
+@@ -764,6 +768,14 @@ quick_outI1(int whack_sock
+     st->st_policy = policy;
+     st->st_try = try;
+ 
++#ifdef HAVE_LABELED_IPSEC
++    st->sec_ctx=NULL;
++    if(uctx != NULL) {
++    st->sec_ctx = clone_thing(*uctx, "sec ctx structure");
++    DBG(DBG_CONTROL, DBG_log("pending phase 2 with security context %s, %d", st->sec_ctx->sec_ctx_value, st->sec_ctx->ctx_len));
++    }
++#endif
++
+     st->st_myuserprotoid = c->spd.this.protocol;
+     st->st_peeruserprotoid = c->spd.that.protocol;
+     st->st_myuserport = c->spd.this.port;
+diff -urNp openswan-2.6.32-cvs-patched/programs/pluto/ikev1_quick.h openswan-2.6.32-current/programs/pluto/ikev1_quick.h
+--- openswan-2.6.32-cvs-patched/programs/pluto/ikev1_quick.h	2011-03-02 10:22:54.213529536 -0500
++++ openswan-2.6.32-current/programs/pluto/ikev1_quick.h	2011-02-22 11:31:38.460262240 -0500
+@@ -20,7 +20,11 @@ extern stf_status quick_outI1(int whack_
+     , struct connection *c
+     , lset_t policy
+     , unsigned long try
+-    , so_serial_t replacing);
++    , so_serial_t replacing
++#ifdef HAVE_LABELED_IPSEC
++    , struct xfrm_user_sec_ctx_ike * uctx
++#endif
++    );
+ 
+ extern state_transition_fn
+     quick_inI1_outR1,
+diff -urNp openswan-2.6.32-cvs-patched/programs/pluto/ikev2.h openswan-2.6.32-current/programs/pluto/ikev2.h
+--- openswan-2.6.32-cvs-patched/programs/pluto/ikev2.h	2011-03-02 10:22:54.269551312 -0500
++++ openswan-2.6.32-current/programs/pluto/ikev2.h	2011-02-22 11:31:38.465261912 -0500
+@@ -7,7 +7,11 @@ extern stf_status ikev2parent_outI1(int 
+ 				    , struct state *predecessor
+ 				    , lset_t policy
+ 				    , unsigned long try
+-				    , enum crypto_importance importance);
++				    , enum crypto_importance importance
++#ifdef HAVE_LABELED_IPSEC
++				    , struct xfrm_user_sec_ctx_ike * uctx
++#endif
++				    );
+ 
+ 
+ 
+diff -urNp openswan-2.6.32-cvs-patched/programs/pluto/ikev2_parent.c openswan-2.6.32-current/programs/pluto/ikev2_parent.c
+--- openswan-2.6.32-cvs-patched/programs/pluto/ikev2_parent.c	2011-03-02 10:22:54.251802017 -0500
++++ openswan-2.6.32-current/programs/pluto/ikev2_parent.c	2011-02-22 11:31:38.463262140 -0500
+@@ -100,7 +100,11 @@ ikev2parent_outI1(int whack_sock
+ 	       , struct state *predecessor
+ 	       , lset_t policy
+ 	       , unsigned long try
+-	       , enum crypto_importance importance)
++	       , enum crypto_importance importance
++#ifdef HAVE_LABELED_IPSEC
++	       , struct xfrm_user_sec_ctx_ike * uctx
++#endif
++	       )
+ {
+     struct state *st = new_state();
+     struct db_sa *sadb;
+@@ -120,8 +124,19 @@ ikev2parent_outI1(int whack_sock
+     st->st_try   = try;
+ 
+     if (HAS_IPSEC_POLICY(policy))
++#ifdef HAVE_LABELED_IPSEC
++	st->sec_ctx = NULL;
++	if( uctx != NULL) {
++	openswan_log("Labeled ipsec is not supported with ikev2 yet");
++	}
++#endif
++
+ 	add_pending(dup_any(whack_sock), st, c, policy, 1
+-	    , predecessor == NULL? SOS_NOBODY : predecessor->st_serialno);
++	    , predecessor == NULL? SOS_NOBODY : predecessor->st_serialno
++#ifdef HAVE_LABELED_IPSEC
++	    , st->sec_ctx
++#endif
++		   );
+ 
+     if (predecessor == NULL)
+ 	openswan_log("initiating v2 parent SA");
+diff -urNp openswan-2.6.32-cvs-patched/programs/pluto/initiate.c openswan-2.6.32-current/programs/pluto/initiate.c
+--- openswan-2.6.32-cvs-patched/programs/pluto/initiate.c	2011-03-02 10:22:53.942528957 -0500
++++ openswan-2.6.32-current/programs/pluto/initiate.c	2011-02-22 11:31:38.451262187 -0500
+@@ -106,6 +106,17 @@ orient(struct connection *c)
+ #ifdef NAT_TRAVERSAL
+ 		if (p->ike_float) continue;
+ #endif
++
++#ifdef HAVE_LABELED_IPSEC
++		if (c->loopback && sameaddr(&sr->this.host_addr, &p->ip_addr)) {
++		DBG(DBG_CONTROLMORE,
++			DBG_log("loopback connections \"%s\" with interface %s!"
++			 , c->name, p->ip_dev->id_rname));
++			c->interface = p;
++			break;
++		}
++#endif
++
+ 		for (;;)
+ 		{
+ 		    /* check if this interface matches this end */
+@@ -223,7 +234,11 @@ initiate_a_connection(struct connection 
+ 	{
+ 	    whackfd = dup(whackfd);
+ 	    ipsecdoi_initiate(whackfd, c, c->policy, 1
+-			      , SOS_NOBODY, importance);
++			      , SOS_NOBODY, importance
++#ifdef HAVE_LABELED_IPSEC
++                                        , NULL 
++#endif
++			     );
+ 	    success = 1;
+ 	}
+     }
+@@ -498,7 +513,11 @@ cannot_oppo(struct connection *c
+ }
+ 
+ static int initiate_ondemand_body(struct find_oppo_bundle *b
+-    , struct adns_continuation *ac, err_t ac_ugh);	/* forward */
++    , struct adns_continuation *ac, err_t ac_ugh
++#ifdef HAVE_LABELED_IPSEC
++    , struct xfrm_user_sec_ctx_ike *uctx
++#endif
++    );	/* forward */
+ 
+ int
+ initiate_ondemand(const ip_address *our_client
+@@ -506,6 +525,9 @@ initiate_ondemand(const ip_address *our_
+ , int transport_proto
+ , bool held
+ , int whackfd
++#ifdef HAVE_LABELED_IPSEC
++, struct xfrm_user_sec_ctx_ike *uctx
++#endif
+ , err_t why)
+ {
+     struct find_oppo_bundle b;
+@@ -520,7 +542,11 @@ initiate_ondemand(const ip_address *our_
+     b.failure_shunt = 0;
+     b.whackfd = whackfd;
+     b.step = fos_start;
+-    return initiate_ondemand_body(&b, NULL, NULL);
++    return initiate_ondemand_body(&b, NULL, NULL
++#ifdef HAVE_LABELED_IPSEC
++				 , uctx
++#endif
++				 );
+ }
+ 
+ static void
+@@ -589,7 +615,11 @@ continue_oppo(struct adns_continuation *
+     }
+     else
+     {
+-	(void)initiate_ondemand_body(&cr->b, &cr->ac, ugh);
++	(void)initiate_ondemand_body(&cr->b, &cr->ac, ugh
++#ifdef HAVE_LABELED_IPSEC
++				     , NULL
++#endif
++				    );
+ 	whackfd = NULL_FD;	/* was handed off */
+     }
+ 
+@@ -715,7 +745,11 @@ check_txt_recs(enum myid_state try_state
+ static int
+ initiate_ondemand_body(struct find_oppo_bundle *b
+ , struct adns_continuation *ac
+-, err_t ac_ugh)
++, err_t ac_ugh
++#ifdef HAVE_LABELED_IPSEC
++    , struct xfrm_user_sec_ctx_ike *uctx
++#endif
++)
+ {
+     struct connection *c;
+     struct spd_route *sr;
+@@ -739,9 +773,21 @@ initiate_ondemand_body(struct find_oppo_
+     ourport = ntohs(portof(&b->our_client));
+     hisport = ntohs(portof(&b->peer_client));
+ 
++
++#ifdef HAVE_LABELED_IPSEC
++    char sec_ctx_value[256];
++    memset(sec_ctx_value, 0, sizeof(sec_ctx_value)); 
++    if(uctx != NULL) {
++    memcpy(sec_ctx_value, uctx->sec_ctx_value, uctx->ctx_len);
++    }
++    snprintf(demandbuf, 256, "initiate on demand from %s:%d to %s:%d proto=%d state: %s because: %s with security context %s"
++             , ours, ourport, his, hisport, b->transport_proto
++             , oppo_step_name[b->step], b->want, sec_ctx_value);
++#else
+     snprintf(demandbuf, 256, "initiate on demand from %s:%d to %s:%d proto=%d state: %s because: %s"
+ 	     , ours, ourport, his, hisport, b->transport_proto
+ 	     , oppo_step_name[b->step], b->want);
++#endif
+     
+     if(DBGP(DBG_OPPOINFO)) {
+ 	openswan_log("%s", demandbuf);
+@@ -817,7 +863,11 @@ initiate_ondemand_body(struct find_oppo_
+ 
+ 	if(!loggedit) { openswan_log("%s", demandbuf); loggedit=TRUE; }
+ 	ipsecdoi_initiate(b->whackfd, c, c->policy, 1
+-			  , SOS_NOBODY, pcim_local_crypto);
++			  , SOS_NOBODY, pcim_local_crypto
++#ifdef HAVE_LABELED_IPSEC
++			  , uctx 
++#endif
++			);
+ 	b->whackfd = NULL_FD;	/* protect from close */
+     }
+     else
+@@ -1240,7 +1290,11 @@ initiate_ondemand_body(struct find_oppo_
+ 				, oppo_step_name[b->step], b->want));
+ 
+ 		    ipsecdoi_initiate(b->whackfd, c, c->policy, 1
+-				      , SOS_NOBODY, pcim_local_crypto);
++				      , SOS_NOBODY, pcim_local_crypto 
++#ifdef HAVE_LABELED_IPSEC
++					, NULL /*shall we pass uctx for opportunistic connections?*/
++#endif
++				     );
+ 		    b->whackfd = NULL_FD;	/* protect from close */
+ 		}
+ 	    }
+diff -urNp openswan-2.6.32-cvs-patched/programs/pluto/ipsec_doi.c openswan-2.6.32-current/programs/pluto/ipsec_doi.c
+--- openswan-2.6.32-cvs-patched/programs/pluto/ipsec_doi.c	2011-03-02 10:22:54.212564118 -0500
++++ openswan-2.6.32-current/programs/pluto/ipsec_doi.c	2011-02-22 11:31:38.460262240 -0500
+@@ -336,7 +336,11 @@ ipsecdoi_initiate(int whack_sock
+ 		  , lset_t policy
+ 		  , unsigned long try
+ 		  , so_serial_t replacing
+-		  , enum crypto_importance importance)
++		  , enum crypto_importance importance
++#ifdef HAVE_LABELED_IPSEC
++		  , struct xfrm_user_sec_ctx_ike * uctx
++#endif
++		  )
+ {
+     /* If there's already an ISAKMP SA established, use that and
+      * go directly to Quick Mode.  We are even willing to use one
+@@ -353,7 +357,11 @@ ipsecdoi_initiate(int whack_sock
+ 	initiator_function *initiator = pick_initiator(c, policy);
+ 	
+ 	if(initiator) {
+-	    (void) initiator(whack_sock, c, NULL, policy, try, importance);
++	    (void) initiator(whack_sock, c, NULL, policy, try, importance
++#ifdef HAVE_LABELED_IPSEC
++				, uctx
++#endif
++			    );
+ 	    return;
+ 	}
+     }
+@@ -365,7 +373,11 @@ ipsecdoi_initiate(int whack_sock
+       if (!IS_ISAKMP_SA_ESTABLISHED(st->st_state)) {
+ 	/* leave our Phase 2 negotiation pending */
+ 	add_pending(whack_sock, st, c, policy, try
+-		    , replacing);
++		    , replacing
++#ifdef HAVE_LABELED_IPSEC
++		    , uctx
++#endif
++		   );
+ 	return;
+       }
+       else {
+@@ -374,7 +386,11 @@ ipsecdoi_initiate(int whack_sock
+ 	 * It isn't clear what to do with the error return.
+ 	 */
+ 	(void) quick_outI1(whack_sock, st, c, policy, try
+-			   , replacing);
++			   , replacing
++#ifdef HAVE_LABELED_IPSEC
++			   , uctx
++#endif
++			  );
+ 	return;
+       }
+     }
+@@ -412,7 +428,11 @@ ipsecdoi_replace(struct state *st
+ 	passert(!HAS_IPSEC_POLICY(policy));
+ 	if(initiator) {
+ 	    (void) initiator(whack_sock, st->st_connection, st, policy
+-			     , try, st->st_import);
++			     , try, st->st_import
++#ifdef HAVE_LABELED_IPSEC
++			     , st->sec_ctx
++#endif
++			    );
+ 	}
+     }
+     else
+@@ -443,7 +463,11 @@ ipsecdoi_replace(struct state *st
+ 	}
+ 	passert(HAS_IPSEC_POLICY(policy));
+ 	ipsecdoi_initiate(whack_sock, st->st_connection, policy, try
+-			  , st->st_serialno, st->st_import);
++			  , st->st_serialno, st->st_import 
++#ifdef HAVE_LABELED_IPSEC
++			  , st->sec_ctx
++#endif
++			 );
+     }
+ }
+ 
+diff -urNp openswan-2.6.32-cvs-patched/programs/pluto/ipsec_doi.h openswan-2.6.32-current/programs/pluto/ipsec_doi.h
+--- openswan-2.6.32-cvs-patched/programs/pluto/ipsec_doi.h	2011-03-02 10:22:54.105529035 -0500
++++ openswan-2.6.32-current/programs/pluto/ipsec_doi.h	2011-02-22 11:31:38.457261781 -0500
+@@ -19,7 +19,11 @@ extern void echo_hdr(struct msg_digest *
+ extern void ipsecdoi_initiate(int whack_sock, struct connection *c
+ 			      , lset_t policy, unsigned long try
+ 			      , so_serial_t replacing
+-			      , enum crypto_importance importance);
++			      , enum crypto_importance importance
++#ifdef HAVE_LABELED_IPSEC
++			     , struct xfrm_user_sec_ctx_ike *
++#endif
++			      );
+ 
+ extern void ipsecdoi_replace(struct state *st
+ 			     , lset_t policy_add, lset_t policy_del
+diff -urNp openswan-2.6.32-cvs-patched/programs/pluto/kernel_bsdkame.c openswan-2.6.32-current/programs/pluto/kernel_bsdkame.c
+--- openswan-2.6.32-cvs-patched/programs/pluto/kernel_bsdkame.c	2011-03-02 10:22:54.212564118 -0500
++++ openswan-2.6.32-current/programs/pluto/kernel_bsdkame.c	2011-02-22 11:31:38.460262240 -0500
+@@ -477,7 +477,11 @@ bsdkame_raw_eroute(const ip_address *thi
+ 		   , const struct pfkey_proto_info *proto_info UNUSED
+ 		   , time_t use_lifetime UNUSED
+ 		   , enum pluto_sadb_operations op
+-		   , const char *text_said UNUSED)
++		   , const char *text_said UNUSED
++#ifdef HAVE_LABELED_IPSEC
++		   , char *policy_label UNUSED
++#endif
++		   )
+ {
+     const struct sockaddr *saddr = (const struct sockaddr *)&this_client->addr;
+     const struct sockaddr *daddr = (const struct sockaddr *)&that_client->addr;
+@@ -921,7 +925,11 @@ bsdkame_sag_eroute(struct state *st 
+ 			      , NULL /* proto_info unused */
+ 			      , 0    /* use lifetime unused */
+ 			      , op
+-			      , NULL /* said unused */);
++			      , NULL /* said unused */
++#ifdef HAVE_LABELED_IPSEC
++			      , NULL /*unused*/
++#endif
++			      );
+ }
+ 
+ static bool
+diff -urNp openswan-2.6.32-cvs-patched/programs/pluto/kernel.c openswan-2.6.32-current/programs/pluto/kernel.c
+--- openswan-2.6.32-cvs-patched/programs/pluto/kernel.c	2011-03-02 10:24:15.063529762 -0500
++++ openswan-2.6.32-current/programs/pluto/kernel.c	2011-02-22 11:31:38.457261781 -0500
+@@ -132,6 +132,9 @@ void
+ record_and_initiate_opportunistic(const ip_subnet *ours
+                                   , const ip_subnet *his
+                                   , int transport_proto
++#ifdef HAVE_LABELED_IPSEC
++                                  , struct xfrm_user_sec_ctx_ike *uctx 
++#endif
+                                   , const char *why)
+ {
+     passert(samesubnettype(ours, his));
+@@ -168,7 +171,11 @@ record_and_initiate_opportunistic(const 
+         networkof(ours, &src);
+         networkof(his, &dst);
+         if (initiate_ondemand(&src, &dst, transport_proto
+-				, TRUE, NULL_FD, "acquire") == 0) {
++				, TRUE, NULL_FD,
++#ifdef HAVE_LABELED_IPSEC
++				uctx,
++#endif
++				"acquire") == 0) {
+ 			/* if we didn't do any ondemand stuff the shunt is not needed */
+ 			struct bare_shunt **bspp = bare_shunt_ptr(ours,his,transport_proto);
+ 			if (bspp) {
+@@ -891,7 +898,11 @@ raw_eroute(const ip_address *this_host
+            , const struct pfkey_proto_info *proto_info
+            , time_t use_lifetime
+            , enum pluto_sadb_operations op
+-           , const char *opname USED_BY_DEBUG)
++           , const char *opname USED_BY_DEBUG
++#ifdef HAVE_LABELED_IPSEC
++	   , char *policy_label
++#endif
++	   )
+ {
+     char text_said[SATOT_BUF];
+     bool result;
+@@ -910,6 +921,11 @@ raw_eroute(const ip_address *this_host
+             DBG_log("%s eroute %s:%d --%d-> %s:%d => %s (raw_eroute)"
+                     , opname, mybuf, sport, transport_proto, peerbuf, dport
+                     , text_said);
++#ifdef HAVE_LABELED_IPSEC
++		if(policy_label) {
++		DBG_log("policy security label %s", policy_label);
++		}
++#endif
+         });
+ 
+     result = kernel_ops->raw_eroute(this_host, this_client
+@@ -917,7 +933,11 @@ raw_eroute(const ip_address *this_host
+                                   , spi, proto
+                                   , transport_proto
+                                   , esatype, proto_info
+-                                  , use_lifetime, op, text_said);
++                                  , use_lifetime, op, text_said
++#ifdef HAVE_LABELED_IPSEC
++				  , policy_label
++#endif
++				  );
+     
+     if(result == FALSE || DBGP(DBG_CONTROL|DBG_KLIPS)) {
+ 	   DBG_log("raw_eroute result=%u\n", result);
+@@ -1039,7 +1059,11 @@ replace_bare_shunt(const ip_address *src
+                                        , htonl(shunt_spi), SA_INT
+                                        , transport_proto
+                                        , ET_INT, null_proto_info
+-                                       , SHUNT_PATIENCE, ERO_REPLACE, why))
++                                       , SHUNT_PATIENCE, ERO_REPLACE, why
++#ifdef HAVE_LABELED_IPSEC
++				       , NULL
++#endif
++				       ))
+                             {
+                                 struct bare_shunt *bs = alloc_thing(struct bare_shunt, "bare shunt");
+                                 
+@@ -1067,7 +1091,11 @@ replace_bare_shunt(const ip_address *src
+                        , SA_INT
+                        , transport_proto
+                        , ET_INT, null_proto_info
+-                       , SHUNT_PATIENCE, ERO_ADD, why))
++                       , SHUNT_PATIENCE, ERO_ADD, why
++#ifdef HAVE_LABELED_IPSEC
++		       , NULL
++#endif
++		       ))
+             {
+                 struct bare_shunt **bs_pp = bare_shunt_ptr(&this_client, &that_client
+                                                            , transport_proto);
+@@ -1090,7 +1118,11 @@ replace_bare_shunt(const ip_address *src
+                        , htonl(shunt_spi), SA_INT
+                        , 0 /* transport_proto */
+                        , ET_INT, null_proto_info
+-                       , SHUNT_PATIENCE, op, why))
++                       , SHUNT_PATIENCE, op, why
++#ifdef HAVE_LABELED_IPSEC
++		       , NULL
++#endif
++		       ))
+             {
+                 struct bare_shunt **bs_pp = bare_shunt_ptr(&this_client
+                                                            , &that_client, 0);
+@@ -1132,7 +1164,11 @@ bool eroute_connection(struct spd_route 
+ 		       , ipsec_spi_t spi, unsigned int proto
+ 		       , enum eroute_type esatype
+ 		       , const struct pfkey_proto_info *proto_info
+-		       , unsigned int op, const char *opname)
++		       , unsigned int op, const char *opname
++#ifdef HAVE_LABELED_IPSEC
++		       , char *policy_label
++#endif
++		       )
+ {
+     const ip_address *peer = &sr->that.host_addr;
+     char buf2[256];
+@@ -1150,7 +1186,11 @@ bool eroute_connection(struct spd_route 
+                       , proto
+                       , sr->this.protocol
+                       , esatype
+-                      , proto_info, 0, op, buf2);
++                      , proto_info, 0, op, buf2
++#ifdef HAVE_LABELED_IPSEC
++		      , policy_label
++#endif
++		      );
+ }
+ 
+ /* assign a bare hold to a connection */
+@@ -1222,7 +1262,11 @@ assign_hold(struct connection *c USED_BY
+ 				  , SA_INT, ET_INT
+ 				  , null_proto_info
+ 				  , op
+-				  , reason)) {
++				  , reason
++#ifdef HAVE_LABELED_IPSEC
++				  , c->policy_label
++#endif
++				  )) {
+                 return FALSE;
+             }
+         }
+@@ -1391,6 +1435,10 @@ setup_half_ipsec_sa(struct state *st, bo
+ 
+ 	said_next->outif   = -1;
+ 
++#ifdef HAVE_LABELED_IPSEC
++	said_next->sec_ctx = st->sec_ctx;
++#endif
++
+ 	if(inbound) {
+ 	    /*
+ 	     * set corresponding outbound SA. We can do this on
+@@ -1482,6 +1530,10 @@ setup_half_ipsec_sa(struct state *st, bo
+ 
+ 	said_next->outif   = -1;
+ 
++#ifdef HAVE_LABELED_IPSEC
++        said_next->sec_ctx = st->sec_ctx;
++#endif
++
+ 	if(inbound) {
+ 	    /*
+ 	     * set corresponding outbound SA. We can do this on
+@@ -1705,6 +1757,11 @@ setup_half_ipsec_sa(struct state *st, bo
+         said_next->enckey = esp_dst_keymat;
+         said_next->encapsulation = encapsulation;
+         said_next->reqid = c->spd.reqid + 1;
++
++#ifdef HAVE_LABELED_IPSEC
++        said_next->sec_ctx = st->sec_ctx;
++#endif
++
+ #ifdef NAT_TRAVERSAL
+         said_next->natt_sport = natt_sport;
+         said_next->natt_dport = natt_dport;
+@@ -1829,6 +1886,10 @@ setup_half_ipsec_sa(struct state *st, bo
+ 	said_next->sa_lifetime = c->sa_ipsec_life_seconds;
+ 	said_next->outif   = -1;
+ 
++#ifdef HAVE_LABELED_IPSEC
++        said_next->sec_ctx = st->sec_ctx;
++#endif
++
+ 	if(inbound) {
+ 	    /*
+ 	     * set corresponding outbound SA. We can do this on
+@@ -1954,7 +2015,11 @@ setup_half_ipsec_sa(struct state *st, bo
+                               , proto_info             /* " */
+ 			      , 0                      /* lifetime */
+                               , ERO_ADD_INBOUND        /* op */
+-			      , "add inbound");        /* opname */
++			      , "add inbound"        /* opname */
++#ifdef HAVE_LABELED_IPSEC
++			      , st->st_connection->policy_label
++#endif
++			      );
+         }
+     }
+ 
+@@ -2047,7 +2112,11 @@ teardown_half_ipsec_sa(struct state *st,
+                           , c->spd.this.protocol
+                           , ET_UNSPEC
+                           , null_proto_info, 0
+-                          , ERO_DEL_INBOUND, "delete inbound");
++                          , ERO_DEL_INBOUND, "delete inbound"
++#ifdef HAVE_LABELED_IPSEC
++			  , c->policy_label
++#endif
++			  );
+     }
+ 
+     if (!kernel_ops->grp_sa)
+@@ -2359,17 +2428,43 @@ install_inbound_ipsec_sa(struct state *s
+      * we can refer to it in the incoming SA.
+      */
+     if(st->st_refhim == IPSEC_SAREF_NULL && !st->st_outbound_done) {
++
++#ifdef HAVE_LABELED_IPSEC
++	if(!st->st_connection->loopback) {
++#endif
++
+ 	DBG(DBG_CONTROL, DBG_log("installing outgoing SA now as refhim=%u", st->st_refhim));
+ 	if(!setup_half_ipsec_sa(st, FALSE)) {
+ 	    DBG_log("failed to install outgoing SA: %u", st->st_refhim);
+ 	    return FALSE;
+ 	}
++#ifdef HAVE_LABELED_IPSEC
++	} 
++	else {
++	DBG(DBG_CONTROL,
++	DBG_log("in case of loopback, the state that initiated this quick mode exchange will install outgoing SAs, so skipping this"));
++	}
++#endif
++
+ 	st->st_outbound_done = TRUE;
+     }
+     DBG(DBG_CONTROL, DBG_log("outgoing SA has refhim=%u", st->st_refhim));
+ 
+     /* (attempt to) actually set up the SAs */
++
++#ifdef HAVE_LABELED_IPSEC
++	if(!st->st_connection->loopback) {
++#endif 
++
+     return setup_half_ipsec_sa(st, TRUE);
++
++#ifdef HAVE_LABELED_IPSEC
++	}
++	else {
++	DBG(DBG_CONTROL, DBG_log("in case of loopback, the state that initiated this quick mode exchange will install incoming SAs, so skipping this"));
++	return TRUE;
++	}
++#endif
+ }
+ 
+ /* Install a route and then a prospective shunt eroute or an SA group eroute.
+@@ -2639,7 +2734,11 @@ route_and_eroute(struct connection *c US
+                     , ET_INT
+                     , null_proto_info
+                     , SHUNT_PATIENCE
+-                    , ERO_REPLACE, "restore");
++                    , ERO_REPLACE, "restore"
++#ifdef HAVE_LABELED_IPSEC
++		    , NULL             /* bare shunt are not associated with any connection so no security label*/
++#endif
++		    );
+             }
+             else if (ero != NULL)
+             {
+@@ -2690,6 +2789,11 @@ install_ipsec_sa(struct state *st, bool 
+                              , st->st_serialno
+                              , inbound_also?
+                              "inbound and outbound" : "outbound only"));
++#ifdef HAVE_LABELED_IPSEC
++    if(st->st_connection->loopback && st->st_state == STATE_QUICK_R1) {
++	return TRUE;
++    }
++#endif
+ 
+     rb = could_route(st->st_connection);
+     switch (rb)
+@@ -2706,7 +2810,11 @@ install_ipsec_sa(struct state *st, bool 
+     /* (attempt to) actually set up the SA group */
+ 
+     /* setup outgoing SA if we haven't already */
+-    if(!st->st_outbound_done) {
++    if(!st->st_outbound_done
++#ifdef HAVE_LABELED_IPSEC
++	&& !st->st_connection->loopback
++#endif
++	) {
+ 	if(!setup_half_ipsec_sa(st, FALSE)) {
+ 	    return FALSE;
+ 	}
+@@ -2841,9 +2949,21 @@ delete_ipsec_sa(struct state *st USED_BY
+ #endif
+ 		}
+ 	    }
++#ifdef HAVE_LABELED_IPSEC
++	    if(!st->st_connection->loopback) {
++#endif
+ 	    (void) teardown_half_ipsec_sa(st, FALSE);
++#ifdef HAVE_LABELED_IPSEC
++	    }
++#endif
+ 	}
++#ifdef HAVE_LABELED_IPSEC
++	if(!st->st_connection->loopback || st->st_state == STATE_QUICK_I2) {
++#endif
+ 	(void) teardown_half_ipsec_sa(st, TRUE);
++#ifdef HAVE_LABELED_IPSEC
++            }
++#endif
+ 
+ 	if (st->st_connection->remotepeertype == CISCO && st->st_serialno == st->st_connection->newest_ipsec_sa) {
+ 		if(!do_command(st->st_connection, &st->st_connection->spd, "restoreresolvconf", st)) {
+@@ -2894,6 +3014,9 @@ static bool update_nat_t_ipsec_esp_sa (s
+         sa.natt_sport = natt_sport;
+         sa.natt_dport = natt_dport;
+         sa.transid = st->st_esp.attrs.transattrs.encrypt;
++#ifdef HAVE_LABELED_IPSEC
++	sa.sec_ctx = st->sec_ctx;
++#endif
+ 
+         return kernel_ops->add_sa(&sa, TRUE);
+ 
+diff -urNp openswan-2.6.32-cvs-patched/programs/pluto/kernel.h openswan-2.6.32-current/programs/pluto/kernel.h
+--- openswan-2.6.32-cvs-patched/programs/pluto/kernel.h	2011-03-02 10:22:54.062544002 -0500
++++ openswan-2.6.32-current/programs/pluto/kernel.h	2011-02-22 11:31:38.455261939 -0500
+@@ -102,6 +102,9 @@ struct kernel_sa {
+ 	ip_address *natt_oa;
+ #endif
+ 	const char *text_said;
++#ifdef HAVE_LABELED_IPSEC
++	struct xfrm_user_sec_ctx_ike *sec_ctx;
++#endif
+   
+     unsigned long sa_lifetime;   /* number of seconds until SA expires */
+ };
+@@ -148,7 +151,11 @@ struct kernel_ops {
+ 		       const struct pfkey_proto_info *proto_info,
+ 		       time_t use_lifetime,
+ 		       enum pluto_sadb_operations op,
+-		       const char *text_said);
++		       const char *text_said
++#ifdef HAVE_LABELED_IPSEC
++		      , char *policy_label
++#endif
++		       );
+     bool (*shunt_eroute)(struct connection *c
+ 			 , struct spd_route *sr
+ 			 , enum routing_t rt_kind
+@@ -295,11 +302,16 @@ struct bare_shunt **bare_shunt_ptr(const
+ # define EM_MAXRELSPIS 4	/* AH ESP IPCOMP IPIP */
+ #endif
+ 
++#ifdef HAVE_LABELED_IPSEC
++struct xfrm_user_sec_ctx_ike; /* forward declaration of tag */
++#endif
+ extern void record_and_initiate_opportunistic(const ip_subnet *
+-					      , const ip_subnet *
+-					      , int transport_proto
+-					      , const char *why);
+-
++                                              , const ip_subnet *
++                                              , int transport_proto
++#ifdef HAVE_LABELED_IPSEC
++                                              , struct xfrm_user_sec_ctx_ike *
++#endif
++                                              , const char *why);
+ extern void init_kernel(void);
+ 
+ extern void scan_proc_shunts(void);
+@@ -351,7 +363,11 @@ extern bool eroute_connection(struct spd
+ 			      , ipsec_spi_t spi, unsigned int proto
+ 			      , enum eroute_type esatype
+ 			      , const struct pfkey_proto_info *proto_info
+-			      , unsigned int op, const char *opname);
++			      , unsigned int op, const char *opname
++#ifdef HAVE_LABELED_IPSEC
++			      , char *policy_label
++#endif
++			      );
+ 
+ static inline bool
+ compatible_overlapping_connections(struct connection *a, struct connection *b)
+diff -urNp openswan-2.6.32-cvs-patched/programs/pluto/kernel_mast.c openswan-2.6.32-current/programs/pluto/kernel_mast.c
+--- openswan-2.6.32-cvs-patched/programs/pluto/kernel_mast.c	2011-03-02 10:22:54.232529272 -0500
++++ openswan-2.6.32-current/programs/pluto/kernel_mast.c	2011-02-22 11:31:38.462261801 -0500
+@@ -476,13 +476,21 @@ mast_raw_eroute(const ip_address *this_h
+                , const struct pfkey_proto_info *proto_info UNUSED
+                , time_t use_lifetime UNUSED
+                , enum pluto_sadb_operations op UNUSED
+-               , const char *text_said UNUSED)
++               , const char *text_said UNUSED
++#ifdef HAVE_LABELED_IPSEC
++	       , char *policy_label UNUSED
++#endif
++	       )
+ {
+     /* actually, we did all the work with iptables in _updown */
+     DBG_log("mast_raw_eroute called op=%u said=%s", op, text_said);
+     return pfkey_raw_eroute(this_host, this_client, that_host, that_client,
+ 		    spi, proto, transport_proto, satype,
+-		    proto_info, use_lifetime, op, text_said);
++		    proto_info, use_lifetime, op, text_said
++#ifdef HAVE_LABELED_IPSEC
++		    , policy_label
++#endif
++		    );
+ }
+ 
+ /* Add/replace/delete a shunt eroute.
+diff -urNp openswan-2.6.32-cvs-patched/programs/pluto/kernel_netlink.c openswan-2.6.32-current/programs/pluto/kernel_netlink.c
+--- openswan-2.6.32-cvs-patched/programs/pluto/kernel_netlink.c	2011-03-02 10:22:54.085535385 -0500
++++ openswan-2.6.32-current/programs/pluto/kernel_netlink.c	2011-02-22 11:31:38.456261790 -0500
+@@ -466,7 +466,11 @@ netlink_raw_eroute(const ip_address *thi
+ 		   , const struct pfkey_proto_info *proto_info
+ 		   , time_t use_lifetime UNUSED
+ 		   , enum pluto_sadb_operations sadb_op
+-		   , const char *text_said)
++		   , const char *text_said
++#ifdef HAVE_LABELED_IPSEC
++		   , char *policy_label
++#endif
++		   )
+ {
+     struct {
+ 	struct nlmsghdr n;
+@@ -684,6 +688,28 @@ netlink_raw_eroute(const ip_address *thi
+ 	req.n.nlmsg_len += attr->rta_len;
+     }
+ 
++#ifdef HAVE_LABELED_IPSEC
++    {
++	if(policy_label) {
++	struct rtattr *attr;
++	struct xfrm_user_sec_ctx *uctx;
++	attr = (struct rtattr *)((char *)&req + req.n.nlmsg_len);
++	attr->rta_type = XFRMA_SEC_CTX;
++	/*Passing null terminated sec label (strlen + '\0')*/
++	DBG_log("passing security label %s (len=%d) to kernel", policy_label, strlen(policy_label));
++	attr->rta_len = RTA_LENGTH(sizeof(struct xfrm_user_sec_ctx) + strlen(policy_label) +1);
++        uctx = RTA_DATA(attr);
++        uctx->exttype = XFRMA_SEC_CTX;
++        uctx->len = sizeof(struct xfrm_user_sec_ctx) + strlen(policy_label) +1;
++        uctx->ctx_doi = 1;
++        uctx->ctx_alg = 1;
++        uctx->ctx_len = strlen(policy_label) +1;
++	memcpy(uctx + 1, policy_label, uctx->ctx_len);
++	req.n.nlmsg_len += attr->rta_len;
++	}
++    }
++#endif
++
+     enoent_ok = FALSE;
+     if (sadb_op == ERO_DEL_INBOUND)
+     {
+@@ -888,6 +914,29 @@ netlink_add_sa(struct kernel_sa *sa, boo
+     }
+ #endif
+ 
++#ifdef HAVE_LABELED_IPSEC
++   if (sa->sec_ctx != NULL) 
++   {
++	struct xfrm_user_sec_ctx xuctx;
++
++	xuctx.len = sizeof(struct xfrm_user_sec_ctx) + sa->sec_ctx->ctx_len;
++	xuctx.exttype = XFRMA_SEC_CTX;
++	xuctx.ctx_alg = 1;
++	xuctx.ctx_doi = 1;
++	xuctx.ctx_len = sa->sec_ctx->ctx_len;
++
++	attr->rta_type = XFRMA_SEC_CTX;
++	attr->rta_len = RTA_LENGTH(xuctx.len);
++	
++        memcpy(RTA_DATA(attr), &xuctx, sizeof(xuctx));
++        memcpy((char *)RTA_DATA(attr) + sizeof(xuctx), sa->sec_ctx->sec_ctx_value
++            , sa->sec_ctx->ctx_len);
++
++        req.n.nlmsg_len += attr->rta_len;
++        attr = (struct rtattr *)((char *)attr + attr->rta_len);
++   }
++#endif
++
+     return send_netlink_msg(&req.n, NULL, 0, "Add SA", sa->text_said);
+ }
+ 
+@@ -1105,6 +1154,17 @@ netlink_acquire(struct nlmsghdr *n)
+     unsigned family;
+     unsigned transport_proto;
+     err_t ugh = NULL;
++#ifdef HAVE_LABELED_IPSEC
++    char *tmp;
++    struct rtattr *attr;
++    int remaining;
++    struct xfrm_user_sec_ctx *xuctx=NULL;
++    char sec_context_value[MAX_SECCTX_LEN];
++    struct xfrm_user_sec_ctx_ike *uctx=NULL;
++    bool found_sec_ctx= FALSE;
++
++    DBG(DBG_NETKEY, DBG_log("xfrm netlink msg len %lu", (unsigned long) n->nlmsg_len));
++#endif
+ 
+     if (n->nlmsg_len < NLMSG_LENGTH(sizeof(*acquire)))
+     {
+@@ -1114,12 +1174,94 @@ netlink_acquire(struct nlmsghdr *n)
+ 	return;
+     }
+ 
++#ifdef HAVE_LABELED_IPSEC
++    DBG(DBG_NETKEY, DBG_log("xfrm:nlmsghdr= %lu", sizeof(struct nlmsghdr)));
++    DBG(DBG_NETKEY, DBG_log("xfrm:acquire= %lu", sizeof(struct xfrm_user_acquire)));
++    DBG(DBG_NETKEY, DBG_log("xfrm:rtattr= %lu", sizeof(struct rtattr)));
++#endif
++
+     acquire = NLMSG_DATA(n);
+     srcx = &acquire->sel.saddr;
+     dstx = &acquire->sel.daddr;
+     family = acquire->policy.sel.family;
+     transport_proto = acquire->sel.proto;
+ 
++#ifdef HAVE_LABELED_IPSEC
++    tmp = (char*) acquire;
++    tmp = tmp + NLMSG_ALIGN (sizeof(struct xfrm_user_acquire));
++    attr = (struct rtattr *)tmp;
++
++   DBG(DBG_NETKEY, DBG_log("rtattr len= %lu", attr->rta_len));
++
++   if ( attr->rta_type == XFRMA_TMPL ) {
++   DBG(DBG_NETKEY, DBG_log("xfrm: found XFRMA_TMPL"));
++   }
++   else {
++   DBG(DBG_NETKEY, DBG_log("xfrm: not found XFRMA_TMPL"));
++	if (attr->rta_type == XFRMA_SEC_CTX ) {
++	DBG(DBG_NETKEY, DBG_log("xfrm: found XFRMA_SEC_CTX"));
++	found_sec_ctx=TRUE;
++	}
++   }
++
++   if(!found_sec_ctx) {
++	DBG(DBG_NETKEY, DBG_log("xfrm: did not found XFRMA_SEC_CTX, trying next one"));
++	DBG(DBG_NETKEY, DBG_log("xfrm: rta->len=%lu", attr->rta_len));
++
++	remaining = n->nlmsg_len - NLMSG_SPACE(sizeof(struct xfrm_user_acquire));
++	attr = RTA_NEXT(attr, remaining);
++
++	DBG(DBG_NETKEY, DBG_log("xfrm: remaining=%d , rta->len = %lu", remaining, attr->rta_len));
++		if (attr->rta_type == XFRMA_SEC_CTX ) {
++		DBG(DBG_NETKEY, DBG_log("xfrm: found XFRMA_SEC_CTX now"));
++		found_sec_ctx=TRUE;
++		}
++		else {
++			if (attr->rta_type == XFRMA_POLICY_TYPE ) {
++			DBG(DBG_NETKEY, DBG_log("xfrm: found XFRMA_POLICY_TYPE"));
++			}
++			else {
++			DBG(DBG_NETKEY, DBG_log("xfrm: not found anything, seems wierd"));
++			DBG(DBG_NETKEY, DBG_log("xfrm: not found sec ctx still, perhaps not a labeled ipsec connection"));
++			}
++		}
++   }
++	
++   if(found_sec_ctx) {
++	xuctx = (struct xfrm_user_sec_ctx *) RTA_DATA(attr);
++	DBG(DBG_NETKEY, DBG_log("xfrm xuctx: exttype=%d, len=%d, ctx_doi=%d, ctx_alg=%d, ctx_len=%d"
++				, xuctx->exttype, xuctx->len, xuctx->ctx_doi, xuctx->ctx_alg, xuctx->ctx_len));
++	DBG(DBG_NETKEY, DBG_log("xfrm xuctx security context: ", (xuctx+1), xuctx->ctx_len));
++
++	if(xuctx->ctx_len <= MAX_SECCTX_LEN) {
++	memcpy(sec_context_value, (xuctx+1), xuctx->ctx_len);
++
++	DBG(DBG_NETKEY, DBG_log("xfrm: xuctx security context value: %s", sec_context_value));
++   
++	uctx = alloc_thing(struct xfrm_user_sec_ctx_ike , "struct xfrm_user_sec_ctx_ike");
++
++	if(uctx != NULL) {	
++	uctx->len = xuctx->len;
++	uctx->exttype = xuctx->exttype;
++	uctx->ctx_alg = xuctx->ctx_alg;
++	uctx->ctx_doi = xuctx->ctx_doi;
++	uctx->ctx_len = xuctx->ctx_len; /*Length includes '\0'*/
++
++	memcpy(uctx->sec_ctx_value, (xuctx+1), xuctx->ctx_len);
++	} 
++	else {
++	DBG(DBG_NETKEY, DBG_log("not enough memory for struct xfrm_user_sec_ctx_ike")); 
++	}
++	}
++	else {
++	DBG(DBG_NETKEY, DBG_log("(should not reach here really) received security length=%d > MAX_SECCTX_LEN", xuctx->ctx_len));
++	DBG(DBG_NETKEY, DBG_log("ignoring ACQUIRE messages"));
++	goto ignore_acquire;
++	}
++   }
++
++#endif
++
+     src_proto = 0;   /* XXX-MCR where to get protocol from? */
+     dst_proto = 0;   /* ditto */
+     src_proto = dst_proto = acquire->sel.proto;
+@@ -1136,8 +1278,16 @@ netlink_acquire(struct nlmsghdr *n)
+ 	&& !(ugh = addrtosubnet(&src, &ours))
+ 	&& !(ugh = addrtosubnet(&dst, &his)))
+       record_and_initiate_opportunistic(&ours, &his, transport_proto
++#ifdef HAVE_LABELED_IPSEC
++					  , uctx
++#endif
+ 					  , "%acquire-netlink");
+ 
++#ifdef HAVE_LABELED_IPSEC
++    pfreeany(uctx);
++
++ignore_acquire:
++#endif
+ 
+     if (ugh != NULL)
+ 	openswan_log("XFRM_MSG_ACQUIRE message from kernel malformed: %s", ugh);
+@@ -1481,7 +1631,11 @@ netlink_sag_eroute(struct state *st, str
+     return eroute_connection(sr
+         , inner_spi, inner_proto
+ 	, inner_esatype, proto_info + i
+-        , op, opname);
++        , op, opname
++#ifdef HAVE_LABELED_IPSEC
++	, st->st_connection->policy_label
++#endif
++	);
+ }
+ 
+ /* Check if there was traffic on given SA during the last idle_max
+@@ -1606,7 +1760,11 @@ netlink_shunt_eroute(struct connection *
+ 			      , SA_INT
+ 			      , sr->this.protocol
+ 			      , ET_INT
+-			      , null_proto_info, 0, op, buf2) )
++			      , null_proto_info, 0, op, buf2 
++#ifdef HAVE_LABELED_IPSEC
++			      , c->policy_label
++#endif
++			      ) )
+       { return FALSE; }
+ 
+       switch (op)
+@@ -1631,7 +1789,11 @@ netlink_shunt_eroute(struct connection *
+ 			      , SA_INT
+ 			      , sr->this.protocol
+ 			      , ET_INT
+-			      , null_proto_info, 0, op, buf2);
++			      , null_proto_info, 0, op, buf2
++#ifdef HAVE_LABELED_IPSEC
++                              , c->policy_label
++#endif
++			      );
+     }
+ }
+ 
+diff -urNp openswan-2.6.32-cvs-patched/programs/pluto/kernel_noklips.c openswan-2.6.32-current/programs/pluto/kernel_noklips.c
+--- openswan-2.6.32-cvs-patched/programs/pluto/kernel_noklips.c	2011-03-02 10:22:54.258529565 -0500
++++ openswan-2.6.32-current/programs/pluto/kernel_noklips.c	2011-02-22 11:31:38.464261781 -0500
+@@ -83,7 +83,11 @@ noklips_raw_eroute(const ip_address *thi
+ 		   , const struct pfkey_proto_info *proto_info UNUSED
+ 		   , time_t use_lifetime UNUSED
+ 		   , unsigned int op UNUSED
+-		   , const char *text_said UNUSED)
++		   , const char *text_said UNUSED
++#ifdef HAVE_LABELED_IPSEC
++		   , char *policy_label UNUSED
++#endif
++		   )
+ {
+   return TRUE;
+ }
+diff -urNp openswan-2.6.32-cvs-patched/programs/pluto/kernel_pfkey.c openswan-2.6.32-current/programs/pluto/kernel_pfkey.c
+--- openswan-2.6.32-cvs-patched/programs/pluto/kernel_pfkey.c	2011-03-02 10:22:54.025530063 -0500
++++ openswan-2.6.32-current/programs/pluto/kernel_pfkey.c	2011-02-22 11:31:38.453261958 -0500
+@@ -453,7 +453,11 @@ process_pfkey_acquire(pfkey_buf *buf, st
+ 	&& !(ugh = addrtypeof(src) == addrtypeof(dst)? NULL : "conflicting address types")
+ 	&& !(ugh = addrtosubnet(src, &ours))
+ 	&& !(ugh = addrtosubnet(dst, &his)))
+-      record_and_initiate_opportunistic(&ours, &his, 0, "%acquire-pfkey");
++      record_and_initiate_opportunistic(&ours, &his, 0, 
++#ifdef HAVE_LABELED_IPSEC
++						NULL,
++#endif
++						"%acquire-pfkey");
+ 
+     if (ugh != NULL)
+ 	plog("K_SADB_ACQUIRE message from KLIPS malformed: %s", ugh);
+@@ -537,6 +541,9 @@ void pfkey_dequeue(void)
+       record_and_initiate_opportunistic(&orphaned_holds->ours
+ 					, &orphaned_holds->his
+ 					, orphaned_holds->transport_proto
++#ifdef HAVE_LABELED_IPSEC
++                                        , NULL
++#endif
+ 					, "%hold found-pfkey");
+ 
+     if (limit <= 0) {
+@@ -869,7 +876,11 @@ pfkey_raw_eroute(const ip_address *this_
+ 		 , const struct pfkey_proto_info *proto_info UNUSED
+ 		 , time_t use_lifetime UNUSED
+ 		 , enum pluto_sadb_operations op
+-		 , const char *text_said)
++		 , const char *text_said
++#ifdef HAVE_LABELED_IPSEC
++		 , char *policy_label UNUSED
++#endif
++		 )
+ {
+     struct sadb_ext *extensions[K_SADB_EXT_MAX + 1];
+     ip_address
+@@ -1328,7 +1339,11 @@ pfkey_shunt_eroute(struct connection *c
+ 			      , SA_INT
+ 			      , sr->this.protocol
+ 			      , ET_INT
+-			      , null_proto_info, 0, op, buf2);
++			      , null_proto_info, 0, op, buf2
++#ifdef HAVE_LABELED_IPSEC
++			      , c->policy_label
++#endif
++			      );
+     }
+ }
+ 
+@@ -1418,7 +1433,11 @@ pfkey_sag_eroute(struct state *st, struc
+     return eroute_connection(sr
+ 			     , inner_spi, inner_proto
+ 			     , inner_esatype, proto_info + i
+-			     , op, opname);
++			     , op, opname
++#ifdef HAVE_LABELED_IPSEC
++			     , NULL
++#endif
++			     );
+ }
+ 
+ /*
+diff -urNp openswan-2.6.32-cvs-patched/programs/pluto/kernel_pfkey.h openswan-2.6.32-current/programs/pluto/kernel_pfkey.h
+--- openswan-2.6.32-cvs-patched/programs/pluto/kernel_pfkey.h	2011-03-02 10:22:54.004698596 -0500
++++ openswan-2.6.32-current/programs/pluto/kernel_pfkey.h	2011-02-22 11:31:38.453261958 -0500
+@@ -51,7 +51,11 @@ extern bool pfkey_raw_eroute(const ip_ad
+ 			     , const struct pfkey_proto_info *proto_info UNUSED
+ 			     , time_t use_lifetime UNUSED
+ 			     , enum pluto_sadb_operations op
+-			     , const char *text_said);
++			     , const char *text_said
++#ifdef HAVE_LABELED_IPSEC
++			    , char *policy_label
++#endif
++			     );
+ 
+ extern bool pfkey_shunt_eroute(struct connection *c
+ 			       , struct spd_route *sr
+diff -urNp openswan-2.6.32-cvs-patched/programs/pluto/kernel_win2k.c openswan-2.6.32-current/programs/pluto/kernel_win2k.c
+--- openswan-2.6.32-cvs-patched/programs/pluto/kernel_win2k.c	2011-03-02 10:22:54.223530761 -0500
++++ openswan-2.6.32-current/programs/pluto/kernel_win2k.c	2011-02-22 11:31:38.461261881 -0500
+@@ -75,7 +75,11 @@ win2k_raw_eroute(const ip_address *this_
+ 		   , const struct pfkey_proto_info *proto_info UNUSED
+ 		   , time_t use_lifetime UNUSED 
+ 		   , unsigned int op UNUSED
+-		   , const char *text_said UNUSED)
++		   , const char *text_said UNUSED
++#ifdef HAVE_LABELED_IPSEC
++		   , char *policy_label UNSUSED
++#endif
++		   )
+ {
+     return FALSE;
+ }
+diff -urNp openswan-2.6.32-cvs-patched/programs/pluto/linux26/xfrm.h openswan-2.6.32-current/programs/pluto/linux26/xfrm.h
+--- openswan-2.6.32-cvs-patched/programs/pluto/linux26/xfrm.h	2011-03-02 10:22:54.221530501 -0500
++++ openswan-2.6.32-current/programs/pluto/linux26/xfrm.h	2011-02-22 11:31:38.460262240 -0500
+@@ -27,6 +27,22 @@ struct xfrm_id
+ 	uint8_t		proto;
+ };
+ 
++struct xfrm_sec_ctx {
++	uint8_t	ctx_doi;
++	uint8_t	ctx_alg;
++	uint16_t	ctx_len;
++	uint32_t	ctx_sid;
++	char	ctx_str[0];
++};
++
++/* Security Context Domains of Interpretation */
++#define XFRM_SC_DOI_RESERVED 0
++#define XFRM_SC_DOI_LSM 1
++
++/* Security Context Algorithms */
++#define XFRM_SC_ALG_RESERVED 0
++#define XFRM_SC_ALG_SELINUX 1
++
+ /* Selector, used as selector both on policy rules (SPD) and SAs. */
+ 
+ struct xfrm_selector
+@@ -136,6 +152,17 @@ enum
+ 
+ #define XFRM_MSG_MAX		(XFRM_MSG_POLEXPIRE+1)
+ 
++/*
++ * Generic LSM security context for comunicating to user space
++ * NOTE: Same format as sadb_x_sec_ctx
++ */
++struct xfrm_user_sec_ctx {
++	uint16_t			len;
++	uint16_t			exttype;
++	uint8_t			ctx_alg;  /* LSMs: e.g., selinux == 1 */
++	uint8_t			ctx_doi;
++	uint16_t			ctx_len;
++};
+ struct xfrm_user_tmpl {
+ 	struct xfrm_id		id;
+ 	uint16_t		family;
+diff -urNp openswan-2.6.32-cvs-patched/programs/pluto/Makefile openswan-2.6.32-current/programs/pluto/Makefile
+--- openswan-2.6.32-cvs-patched/programs/pluto/Makefile	2011-03-02 10:22:54.048548476 -0500
++++ openswan-2.6.32-current/programs/pluto/Makefile	2011-02-22 11:31:38.454262437 -0500
+@@ -131,6 +131,7 @@ DISTSRC = \
+ 	vendor.c nat_traversal.c virtual.c \
+ 	adns.c adns.h \
+ 	whack.c whackinit.c \
++	security_selinux.c \
+ 	${XAUTH_DIST_SRCS} \
+ 	${AGGRESSIVE_DIST_SRCS}
+ 
+@@ -154,7 +155,7 @@ OBJSPLUTO += kernel_noklips.o rcv_whack.
+ OBJSPLUTO += ${IPSECPOLICY_OBJS} demux.o msgdigest.o keys.o dnskey.o
+ OBJSPLUTO += pluto_crypt.o crypt_utils.o crypt_ke.o crypt_dh.o crypt_start_dh.o
+ OBJSPLUTO += ikev2_crypto.o ikev2_prfplus.o 
+-OBJSPLUTO += rnd.o spdb.o spdb_struct.o spdb_v1_struct.o spdb_print.o 
++OBJSPLUTO += rnd.o spdb.o spdb_struct.o spdb_v1_struct.o spdb_print.o security_selinux.o
+ OBJSPLUTO += vendor.o nat_traversal.o virtual.o 
+ OBJSPLUTO += ike_alg_aes.o ike_alginit.o ikev2_rsa.o ikev2_psk.o ikev2_x509.o
+ OBJSPLUTO += ${EXTRA_CRYPTO_OBJS}
+diff -urNp openswan-2.6.32-cvs-patched/programs/pluto/Makefile.depend.freebsd openswan-2.6.32-current/programs/pluto/Makefile.depend.freebsd
+--- openswan-2.6.32-cvs-patched/programs/pluto/Makefile.depend.freebsd	2011-03-02 10:22:54.184540868 -0500
++++ openswan-2.6.32-current/programs/pluto/Makefile.depend.freebsd	2011-02-22 11:31:38.458261841 -0500
+@@ -1137,7 +1137,7 @@ plutomain.o: plutomain.c \
+   ../../include/mpzfuncs.h vendor.h \
+   pluto_crypt.h \
+   ../../include/dev/hifn/vulcanpk_funcs.h \
+-  virtual.h nat_traversal.h
++  virtual.h nat_traversal.h security_selinux.h
+ primegen.o: primegen.c \
+   ../../linux/include/openswan.h \
+   ../../include/constants.h \
+@@ -1712,3 +1712,4 @@ xauth.o: xauth.c \
+   ../../include/mpzfuncs.h ike_alg.h \
+   xauth.h virtual.h
+ parser.tab.o: parser.tab.c
++security_selinux.o: security_selinux.c
+diff -urNp openswan-2.6.32-cvs-patched/programs/pluto/Makefile.depend.linux openswan-2.6.32-current/programs/pluto/Makefile.depend.linux
+--- openswan-2.6.32-cvs-patched/programs/pluto/Makefile.depend.linux	2011-03-02 10:22:54.234529391 -0500
++++ openswan-2.6.32-current/programs/pluto/Makefile.depend.linux	2011-02-22 11:31:38.462261801 -0500
+@@ -1023,7 +1023,7 @@ plutomain.o: plutomain.c ../../include/a
+   ../../include/oswtime.h ../../include/sha1.h \
+   ../../include/md5.h crypto.h \
+   ../../lib/libcrypto/libsha2/sha2.h ../../include/mpzfuncs.h \
+-  vendor.h pluto_crypt.h virtual.h nat_traversal.h
++  vendor.h pluto_crypt.h virtual.h nat_traversal.h security_selinux.h
+ primegen.o: primegen.c ../../linux/include/openswan.h \
+   ../../include/constants.h ../../include/biglset.h \
+   ../../linux/include/openswan/passert.h \
+@@ -1218,7 +1218,7 @@ spdb_v1_struct.o: spdb_v1_struct.c ../..
+   ../../lib/libcrypto/libsha2/sha2.h ../../include/mpzfuncs.h \
+   ../../include/alg_info.h ../../include/kernel_alg.h \
+   ../../linux/include/openswan/pfkeyv2.h ike_alg.h db_ops.h \
+-  nat_traversal.h demux.h server.h
++  nat_traversal.h demux.h server.h security_selinux.h
+ spdb_v2_struct.o: spdb_v2_struct.c ../../linux/include/openswan.h \
+   ../../linux/include/openswan/ipsec_policy.h \
+   ../../linux/include/openswan/pfkeyv2.h \
+@@ -1469,3 +1469,4 @@ xauth.o: xauth.c ../../linux/include/ope
+   ../../lib/libcrypto/libsha2/sha2.h ../../include/mpzfuncs.h \
+   ike_alg.h xauth.h virtual.h
+ parser.tab.o: parser.tab.c
++security_selinux.o: security_selinux.c
+diff -urNp openswan-2.6.32-cvs-patched/programs/pluto/Makefile.options openswan-2.6.32-current/programs/pluto/Makefile.options
+--- openswan-2.6.32-cvs-patched/programs/pluto/Makefile.options	2011-03-02 10:22:54.228529453 -0500
++++ openswan-2.6.32-current/programs/pluto/Makefile.options	2011-02-22 11:31:38.461261881 -0500
+@@ -343,3 +343,9 @@ endif
+ ifeq ($(USE_NM),true)
+ DEFINES+=-DHAVE_NM
+ endif
++
++# LABELED IPSEC support
++ifeq ($(USE_LABELED_IPSEC),true)
++DEFINES+=-DHAVE_LABELED_IPSEC
++LIBSPLUTO+= -lselinux
++endif
+diff -urNp openswan-2.6.32-cvs-patched/programs/pluto/pending.c openswan-2.6.32-current/programs/pluto/pending.c
+--- openswan-2.6.32-cvs-patched/programs/pluto/pending.c	2011-03-02 10:22:54.035537783 -0500
++++ openswan-2.6.32-current/programs/pluto/pending.c	2011-02-22 11:31:38.454262437 -0500
+@@ -62,6 +62,9 @@ struct pending {
+     unsigned long try;
+     so_serial_t   replacing;
+     time_t        pend_time;
++#ifdef HAVE_LABELED_IPSEC
++    struct xfrm_user_sec_ctx_ike * uctx;
++#endif
+ 
+     struct pending *next;
+ };
+@@ -73,7 +76,11 @@ add_pending(int whack_sock
+ , struct connection *c
+ , lset_t policy
+ , unsigned long try
+-, so_serial_t replacing)
++, so_serial_t replacing
++#ifdef HAVE_LABELED_IPSEC
++, struct xfrm_user_sec_ctx_ike * uctx
++#endif
++)
+ {
+     struct pending *p = alloc_thing(struct pending, "struct pending");
+ 
+@@ -87,6 +94,14 @@ add_pending(int whack_sock
+     p->try = try;
+     p->replacing = replacing;
+     p->pend_time = time(NULL);
++#ifdef HAVE_LABELED_IPSEC
++    p->uctx = NULL;
++    if(uctx!=NULL) {
++    p->uctx = clone_thing(*uctx, "pending security context");
++    DBG(DBG_CONTROL, DBG_log("pending phase 2 with security context %s, %d"
++	, p->uctx->sec_ctx_value, p->uctx->ctx_len));
++    }
++#endif
+ 
+     host_pair_enqueue_pending(c, p, &p->next);
+ }
+@@ -147,6 +162,10 @@ delete_pending(struct pending **pp)
+ 	DBG_log("removing pending policy for \"%s\" {%p}",
+ 		p->connection ? p->connection->name : "none", p));
+ 
++#ifdef HAVE_LABELED_IPSEC
++   pfreeany(p->uctx);
++#endif
++
+     pfree(p);
+ }
+ 
+@@ -180,7 +199,11 @@ unpend(struct state *st)
+ 
+ 	    p->pend_time = time(NULL);
+ 	    (void) quick_outI1(p->whack_sock, st, p->connection, p->policy
+-			       , p->try, p->replacing);
++			       , p->try, p->replacing
++#ifdef HAVE_LABELED_IPSEC
++			       , p->uctx
++#endif
++			      );
+ 	    p->whack_sock = NULL_FD;	/* ownership transferred */
+ 	    p->connection = NULL;	/* ownership transferred */
+ 	    delete_pending(pp);
+diff -urNp openswan-2.6.32-cvs-patched/programs/pluto/plutomain.c openswan-2.6.32-current/programs/pluto/plutomain.c
+--- openswan-2.6.32-cvs-patched/programs/pluto/plutomain.c	2011-03-02 10:24:25.875780074 -0500
++++ openswan-2.6.32-current/programs/pluto/plutomain.c	2011-02-22 11:31:38.453261958 -0500
+@@ -110,6 +110,10 @@
+ #include <cap-ng.h>
+ #endif
+ 
++#ifdef HAVE_LABELED_IPSEC
++#include "security_selinux.h"
++#endif
++
+ const char *ctlbase = "/var/run/pluto";
+ char *pluto_listen = NULL;
+ 
+@@ -162,6 +166,10 @@ usage(const char *mess)
+ 	    " \\\n\t"
+ 	    "[--adns <pathname>]"
+ 	    "[--nhelpers <number>]"
++#ifdef HAVE_LABELED_IPSEC
++	    " \\\n\t"
++	    "[--secctx_attr_value <number>]"
++#endif
+ #ifdef DEBUG
+ 	    " \\\n\t"
+ 	    "[--debug-none]"
+@@ -297,6 +305,10 @@ char **global_argv;
+ int    global_argc;
+ bool   log_to_stderr_desired = FALSE;
+ 
++#ifdef HAVE_LABELED_IPSEC
++u_int16_t secctx_attr_value=SECCTX;
++#endif
++
+ int
+ main(int argc, char **argv)
+ {
+@@ -406,6 +418,9 @@ main(int argc, char **argv)
+ #endif
+ 	    { "virtual_private", required_argument, NULL, '6' },
+ 	    { "nhelpers", required_argument, NULL, 'j' },
++#ifdef HAVE_LABELED_IPSEC
++	    { "secctx_attr_value", required_argument, NULL, 'w' },
++#endif
+ #ifdef DEBUG
+ 	    { "debug-none", no_argument, NULL, 'N' },
+ 	    { "debug-all", no_argument, NULL, 'A' },
+@@ -496,6 +511,23 @@ main(int argc, char **argv)
+             }
+ 	    continue;
+ 
++#ifdef HAVE_LABELED_IPSEC
++	case 'w':	/* --secctx_attr_value*/
++	    if (optarg == NULL || !isdigit(optarg[0]))
++		usage("missing (positive integer) value of secctx_attr_value (needed only if using labeled ipsec)");
++
++	   {
++                char *endptr;
++                long value = strtol(optarg, &endptr, 0);
++
++                if (*endptr != '\0' || endptr == optarg
++                    || (value != SECCTX && value !=10) )
++                    usage("<secctx_attr_value> must be a positive number (32001 by default, 10 for backward compatibility, or any other future number assigned by IANA)");
++                 secctx_attr_value = (u_int16_t)value;
++	   }
++	   continue;
++#endif
++
+ 	case 'd':	/* --nofork*/
+ 	    fork_desired = FALSE;
+ 	    continue;
+@@ -1025,6 +1057,10 @@ main(int argc, char **argv)
+     load_authcerts_from_nss("CA cert",  AUTH_CA);
+ #endif
+ 
++#ifdef HAVE_LABELED_IPSEC
++    init_avc();
++#endif
++
+     daily_log_event();
+     call_server();
+     return -1;	/* Shouldn't ever reach this */
+diff -urNp openswan-2.6.32-cvs-patched/programs/pluto/rcv_whack.c openswan-2.6.32-current/programs/pluto/rcv_whack.c
+--- openswan-2.6.32-cvs-patched/programs/pluto/rcv_whack.c	2011-03-02 10:22:54.047538220 -0500
++++ openswan-2.6.32-current/programs/pluto/rcv_whack.c	2011-02-22 11:31:38.454262437 -0500
+@@ -632,7 +632,11 @@ void whack_process(int whackfd, struct w
+ 	else
+ 	    (void)initiate_ondemand(&msg.oppo_my_client, &msg.oppo_peer_client, 0
+ 		, FALSE
+-		, msg.whack_async? NULL_FD : dup_any(whackfd), "whack");
++		, msg.whack_async? NULL_FD : dup_any(whackfd)
++#ifdef HAVE_LABELED_IPSEC 
++		, NULL 
++#endif
++		, "whack");
+     }
+ 
+     if (msg.whack_terminate)
+diff -urNp openswan-2.6.32-cvs-patched/programs/pluto/security_selinux.c openswan-2.6.32-current/programs/pluto/security_selinux.c
+--- openswan-2.6.32-cvs-patched/programs/pluto/security_selinux.c	1969-12-31 19:00:00.000000000 -0500
++++ openswan-2.6.32-current/programs/pluto/security_selinux.c	2011-02-22 11:31:38.462261801 -0500
+@@ -0,0 +1,88 @@
++/* selinux routines
++ * Copyright (C) 2011 Avesh Agarwal <avagarwa@redhat.com>
++ *
++ * This program is free software; you can redistribute it and/or modify it
++ * under the terms of the GNU General Public License as published by the
++ * Free Software Foundation; either version 2 of the License, or (at your
++ * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
++ *
++ * This program is distributed in the hope that it will be useful, but
++ * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
++ * for more details.
++ *
++ */
++
++#ifdef HAVE_LABELED_IPSEC
++
++#include "security_selinux.h"
++#include "oswlog.h"
++
++static int selinux_ready = 0;
++
++void
++init_avc(void)
++{
++        if (!is_selinux_enabled()) {
++                DBG_log("selinux support is NOT enabled.\n");
++                return;
++        }
++	else {
++		DBG_log("selinux support is enabled.\n");
++	}
++
++        if (avc_init("openswan", NULL, NULL, NULL, NULL) == 0) {
++                selinux_ready = 1;
++	}
++        else {
++                DBG_log("selinux: could not initialize avc.\n");
++	}
++}
++
++
++int
++within_range(security_context_t sl, security_context_t range)
++{
++        int rtn = 1;
++        security_id_t slsid;
++        security_id_t rangesid;
++        struct av_decision avd;
++        security_class_t tclass;
++        access_vector_t av;
++
++        if (!selinux_ready) {  /* mls may not be enabled */
++		DBG_log("selinux check failed");
++                return 0;
++	}
++
++	/*
++	* * Get the sids for the sl and range contexts
++	* */
++        rtn = avc_context_to_sid(sl, &slsid);
++        if (rtn != 0) {
++                DBG_log("within_range: Unable to retrieve sid for sl context (%s)", sl);
++                return 0;
++        }
++        rtn = avc_context_to_sid(range, &rangesid);
++        if (rtn != 0) {
++                DBG_log("within_range: Unable to retrieve sid for range context (%s)", range);
++                sidput(slsid);
++                return 0;
++        }
++
++	/* 
++	** Straight up test between sl and range
++	**/
++        tclass = SECCLASS_ASSOCIATION;
++        av = ASSOCIATION__POLMATCH;
++        rtn = avc_has_perm(slsid, rangesid, tclass, av, NULL, &avd);
++        if (rtn != 0) {
++                DBG_log("within_range: The sl (%s) is not within range of (%s)", sl, range);
++                sidput(slsid);
++                sidput(rangesid);
++                return 0;
++        }
++        DBG_log("within_range: The sl (%s) is within range of (%s)", sl, range);
++	return 1;
++}
++#endif
+diff -urNp openswan-2.6.32-cvs-patched/programs/pluto/security_selinux.h openswan-2.6.32-current/programs/pluto/security_selinux.h
+--- openswan-2.6.32-cvs-patched/programs/pluto/security_selinux.h	1969-12-31 19:00:00.000000000 -0500
++++ openswan-2.6.32-current/programs/pluto/security_selinux.h	2011-02-22 11:31:38.462261801 -0500
+@@ -0,0 +1,27 @@
++/* Openswan Selinux APIs
++ * Copyright (C) 2011 Avesh Agarwal <avagarwa@redhat.com>
++ *
++ * This program is free software; you can redistribute it and/or modify it
++ * under the terms of the GNU General Public License as published by the
++ * Free Software Foundation; either version 2 of the License, or (at your
++ * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
++ *
++ * This program is distributed in the hope that it will be useful, but
++ * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
++ * for more details.
++ */
++
++#ifndef _SECURITY_SELINUX_H
++#define _SECURITY_SELINUX_H
++
++#include <selinux/selinux.h>
++#include <selinux/flask.h>
++#include <selinux/av_permissions.h>
++#include <selinux/avc.h>
++#include <selinux/context.h>
++
++void init_avc(void);
++int within_range(security_context_t sl, security_context_t range);
++
++#endif /* _SECURITY_SELINUX_H */
+diff -urNp openswan-2.6.32-cvs-patched/programs/pluto/spdb_v1_struct.c openswan-2.6.32-current/programs/pluto/spdb_v1_struct.c
+--- openswan-2.6.32-cvs-patched/programs/pluto/spdb_v1_struct.c	2011-03-02 10:24:36.302530207 -0500
++++ openswan-2.6.32-current/programs/pluto/spdb_v1_struct.c	2011-03-02 10:29:04.726792948 -0500
+@@ -60,6 +60,119 @@
+ #include "nat_traversal.h"
+ #endif
+ 
++#ifdef HAVE_LABELED_IPSEC
++#include "security_selinux.h"
++#endif
++
++#ifdef HAVE_LABELED_IPSEC
++static bool
++parse_secctx_attr (pb_stream *pbs, struct state *st)
++{
++		/*supported length is 256 bytes (257 including \0)*/
++		char sec_ctx_value[MAX_SECCTX_LEN];
++		u_int8_t  ctx_doi;
++		u_int8_t  ctx_alg;
++		u_int16_t net_ctx_len, ctx_len;
++		int i=0;
++
++		DBG(DBG_PARSING, DBG_log("received sec ctx"));
++		
++		/*doing sanity check*/
++		if(pbs_left(pbs) < (sizeof(ctx_doi) + sizeof(ctx_alg) + sizeof(ctx_len) + 1) ) {
++			DBG(DBG_PARSING, DBG_log("received perhaps corrupted security ctx (should not happen really)"));
++			return FALSE;
++		}
++
++		/*reading ctx doi*/
++		memcpy (&ctx_doi, pbs->cur, sizeof(ctx_doi));
++		pbs->cur += sizeof(ctx_doi);
++		
++		/*reading ctx alg*/
++		memcpy (&ctx_alg, pbs->cur, sizeof(ctx_alg));
++		pbs->cur += sizeof(ctx_alg);
++
++		/*reading ctx length*/
++		memcpy (&net_ctx_len, pbs->cur, sizeof(ctx_len));
++		pbs->cur += sizeof(ctx_len);
++		ctx_len = ntohs(net_ctx_len);
++
++		DBG(DBG_PARSING, DBG_log("   received ctx_doi = %d, ctx_alg = %d, ctx_len = %d", ctx_doi , ctx_alg, ctx_len));
++
++		/* verifying remaining buffer length and ctx length matches or not (checking for any corruption)*/
++		if(ctx_len != pbs_left(pbs) ) {
++			DBG(DBG_PARSING, DBG_log("received ctx length seems to be different than the length of string present in the buffer"));
++			DBG(DBG_PARSING, DBG_log("received ctx_len = %d, buffer left = %lu", ctx_len, pbs_left(pbs)));
++			return FALSE;
++		}
++
++		/* reading security label*/
++		memcpy(sec_ctx_value, pbs->cur, pbs_left(pbs) <= MAX_SECCTX_LEN ? pbs_left(pbs) : MAX_SECCTX_LEN);
++		i = pbs_left(pbs) <= MAX_SECCTX_LEN ? pbs_left(pbs) : MAX_SECCTX_LEN;
++
++		/* checking if the received security label contains \0 */
++		if( sec_ctx_value[i-1] != '\0') {
++			/*check if we have space left and then append \0*/
++			if (i < MAX_SECCTX_LEN) {
++			sec_ctx_value[i] = '\0';
++			i=i+1;
++			} else {
++			/*there is no space left*/
++			DBG(DBG_PARSING, DBG_log("received security label > MAX_SECCTX_LEN (should not happen really)"));
++			return FALSE;
++			}
++		}
++		
++		/*while (pbs_left(pbs) != 0){
++		sec_ctx_value[i++]= *pbs->cur++;
++		    if(i == MAX_SECCTX_LEN){
++		    DBG(DBG_PARSING, DBG_log("security label reached maximum length (MAX_SECCTX_LEN) allowed"));
++		    break;
++		    }	
++		}*/
++
++		//sec_ctx_value[i]='\0';
++		DBG(DBG_PARSING, DBG_log("   sec ctx value: %s, len=%d", sec_ctx_value, i));
++
++		if(st->sec_ctx == NULL && st->st_state==STATE_QUICK_R0) {
++		    DBG_log("Receievd sec ctx in responder state");
++		    st->sec_ctx = alloc_thing(struct xfrm_user_sec_ctx_ike , "struct xfrm_user_sec_ctx_ike");
++		    memcpy (st->sec_ctx->sec_ctx_value, sec_ctx_value, i);
++		    st->sec_ctx->ctx_len = i;
++		    st->sec_ctx->ctx_alg = ctx_alg;
++		    st->sec_ctx->ctx_doi = ctx_doi;
++
++	/* lets verify if the received security label is within range of this connection's policy's security label*/
++	   if(!st->st_connection->labeled_ipsec) {
++		DBG_log("This state (connection) is not labeled ipsec enabled, so can not proceed");
++		return FALSE;
++	   }
++	   else if( st->st_connection->policy_label != NULL && within_range(st->sec_ctx->sec_ctx_value, st->st_connection->policy_label)) {
++		DBG_log("security context verification succedded");
++	   }
++	   else {
++		DBG_log("security context verification failed (perhaps policy_label is not confgured for this connection)");
++		return FALSE;
++	   }
++
++	}
++	else if (st->st_state==STATE_QUICK_I1 ) {
++	DBG(DBG_PARSING, DBG_log("Initiator state received security context from responder state, now verifying if both are same"));
++	   if(!strcmp(st->sec_ctx->sec_ctx_value, sec_ctx_value)) {
++		DBG_log("security contexts are verified in the initiator state");
++	   }
++	   else {
++		DBG_log("security context verification failed in the initiator state" 
++				"(shouldnt reach here unless responder (or something in between) is modifying the security context");
++		return FALSE;
++	   }	
++	}
++	else if (st->st_state==STATE_QUICK_R0) {
++		DBG_log("Receievd sec ctx in responder state again, already stored it so doing nothing now");
++	}
++	return TRUE;
++}
++#endif
++
+ /** output an attribute (within an SA) */
+ bool
+ out_attr(int type
+@@ -489,6 +602,29 @@ out_sa(pb_stream *outs
+ 			, st->st_connection->sa_ipsec_life_seconds
+ 			, attr_desc, attr_val_descs
+ 			, &trans_pbs);
++#ifdef HAVE_LABELED_IPSEC
++		    if(st->sec_ctx != NULL && st->st_connection->labeled_ipsec) {
++			struct isakmp_attribute attr;
++			pb_stream val_pbs;
++			attr.isaat_af_type = secctx_attr_value | ISAKMP_ATTR_AF_TLV;
++			DBG(DBG_EMITTING, DBG_log("secctx_attr_value=%d, type=%d", secctx_attr_value, attr.isaat_af_type));
++			out_struct(&attr, attr_desc, &trans_pbs, &val_pbs); 
++			DBG(DBG_EMITTING, DBG_log("placing security context attribute in the out going structure"));
++			DBG(DBG_EMITTING, DBG_log("sending ctx_doi"));
++			out_raw(&st->sec_ctx->ctx_doi, sizeof(st->sec_ctx->ctx_doi),  &val_pbs, " variable length sec ctx: ctx_doi");
++			DBG(DBG_EMITTING, DBG_log("sending ctx_alg"));
++			out_raw(&st->sec_ctx->ctx_alg, sizeof(st->sec_ctx->ctx_alg),  &val_pbs, " variable length sec ctx: ctx_alg");
++			DBG(DBG_EMITTING, DBG_log("sending ctx_len after conversion to network byte order"));
++			u_int16_t net_ctx_len = htons(st->sec_ctx->ctx_len);
++			out_raw(&net_ctx_len, sizeof(st->sec_ctx->ctx_len),  &val_pbs, " variable length sec ctx: ctx_len");
++			/*Sending '\0'  with sec ctx as we get it from kernel*/
++			out_raw(st->sec_ctx->sec_ctx_value, st->sec_ctx->ctx_len, &val_pbs, " variable length sec ctx");
++			DBG(DBG_EMITTING, DBG_log("placed security context attribute in the out going structure"));
++        		close_output_pbs(&val_pbs);
++			DBG(DBG_EMITTING, DBG_log("end of security context attribute in the out going structure"));
++		    }
++#endif
++
+ 		}
+ 
+ 		/* spit out attributes from table */
+@@ -1488,7 +1624,10 @@ parse_ipsec_transform(struct isakmp_tran
+ 	if (!in_struct(&a, &isakmp_ipsec_attribute_desc, trans_pbs, &attr_pbs))
+ 	    return FALSE;
+ 
++#ifndef HAVE_LABELED_IPSEC
++	/*This check is no longer valid when using security labels as SECCTX attribute is in private range and has value of 32001*/
+ 	passert((a.isaat_af_type & ISAKMP_ATTR_RTYPE_MASK) < 32);
++#endif
+ 
+ 	if (LHAS(seen_attrs, a.isaat_af_type & ISAKMP_ATTR_RTYPE_MASK))
+ 	{
+@@ -1502,7 +1641,14 @@ parse_ipsec_transform(struct isakmp_tran
+ 
+ 	val = a.isaat_lv;
+ 
+-	vdesc  = ipsec_attr_val_descs[a.isaat_af_type & ISAKMP_ATTR_RTYPE_MASK];
++	vdesc  = ipsec_attr_val_descs[a.isaat_af_type & ISAKMP_ATTR_RTYPE_MASK
++#ifdef HAVE_LABELED_IPSEC
++	/* The original code (without labeled ipsec) assumes a.isaat_af_type & ISAKMP_ATTR_RTYPE_MASK) < 32, */
++	/* so for retaining the same behavior when this is < 32 and if more than >= 32 setting it to 0, */
++	/* which is NULL in ipsec_attr_val_desc*/
++					>= 32 ? 0 : a.isaat_af_type & ISAKMP_ATTR_RTYPE_MASK
++#endif
++				     ];
+ 	if (vdesc != NULL)
+ 	{
+ 	    if (enum_name(vdesc, val) == NULL)
+@@ -1519,6 +1665,16 @@ parse_ipsec_transform(struct isakmp_tran
+ 
+ 	switch (a.isaat_af_type)
+ 	{
++#ifdef HAVE_LABELED_IPSEC
++	   case SECCTX | ISAKMP_ATTR_AF_TLV:
++		{
++                    pb_stream *   pbs=&attr_pbs;
++                        if (!parse_secctx_attr (pbs, st)) {
++                        return FALSE;
++                        }
++                }
++		break;
++#endif
+ 	    case SA_LIFE_TYPE | ISAKMP_ATTR_AF_TV:
+ 		ipcomp_inappropriate = FALSE;
+ 		if (LHAS(seen_durations, val))
+@@ -1694,10 +1850,23 @@ parse_ipsec_transform(struct isakmp_tran
+ 		break;
+ #endif
+ 	    default:
++#ifdef HAVE_LABELED_IPSEC
++		if(a.isaat_af_type == (secctx_attr_value | ISAKMP_ATTR_AF_TLV) ) {
++		    pb_stream *   pbs=&attr_pbs;
++			if (!parse_secctx_attr (pbs, st)) {
++			return FALSE;
++			}
++		}
++		else {
++#endif
+ 		loglog(RC_LOG_SERIOUS, "unsupported IPsec attribute %s"
+ 		    , enum_show(&ipsec_attr_names, a.isaat_af_type));
+ 		return FALSE;
++#ifdef HAVE_LABELED_IPSEC
++		}
++#endif
+ 	}
++		
+ 	if (ipcomp_inappropriate)
+ 	{
+ 	    loglog(RC_LOG_SERIOUS, "IPsec attribute %s inappropriate for IPCOMP"
+@@ -2449,7 +2618,6 @@ parse_ipsec_sa_body(
+     return NO_PROPOSAL_CHOSEN;
+ }
+ 
+-
+ /*
+  * Local Variables:
+  * c-style: pluto
+diff -urNp openswan-2.6.32-cvs-patched/programs/pluto/state.c openswan-2.6.32-current/programs/pluto/state.c
+--- openswan-2.6.32-cvs-patched/programs/pluto/state.c	2011-03-02 10:22:54.236529581 -0500
++++ openswan-2.6.32-current/programs/pluto/state.c	2011-02-22 11:31:38.462261801 -0500
+@@ -506,6 +506,9 @@ delete_state(struct state *st)
+     pfreeany(st->st_esp.our_keymat);
+     pfreeany(st->st_esp.peer_keymat);
+     freeanychunk(st->st_xauth_password);
++#ifdef HAVE_LABELED_IPSEC
++    pfreeany(st->sec_ctx);
++#endif
+     pfree(st);
+ }
+ 
+@@ -975,6 +978,45 @@ find_state_ikev1(const u_char *icookie
+     return st;
+ }
+ 
++#ifdef HAVE_LABELED_IPSEC
++struct state *
++find_state_ikev1_loopback(const u_char *icookie
++                 , const u_char *rcookie
++                 , const ip_address *peer UNUSED
++                 , msgid_t /*network order*/ msgid
++		 , struct msg_digest *md)
++{
++    struct state *st = *state_hash(icookie, rcookie, NULL);
++
++    while (st != (struct state *) NULL)
++    {
++        if (memcmp(icookie, st->st_icookie, COOKIE_SIZE) == 0
++            && memcmp(rcookie, st->st_rcookie, COOKIE_SIZE) == 0
++            && st->st_ikev2 == FALSE)
++        {
++            DBG(DBG_CONTROL,
++                DBG_log("loopback: v1 peer and cookies match on #%ld, provided msgid %08lx vs %08lx"
++                        , st->st_serialno
++                        , (long unsigned)ntohl(msgid)
++                        , (long unsigned)ntohl(st->st_msgid)));
++            if(msgid == st->st_msgid && !(st->st_tpacket.ptr && memcmp(st->st_tpacket.ptr, md->packet_pbs.start, pbs_room(&md->packet_pbs)) ==0))
++                break;
++        }
++        st = st->st_hashchain_next;
++    }
++
++    DBG(DBG_CONTROL,
++        if (st == NULL)
++            DBG_log("loopback: v1 state object not found");
++        else
++            DBG_log("loopback: v1 state object #%lu found, in %s"
++                , st->st_serialno
++                , enum_show(&state_names, st->st_state)));
++
++    return st;
++}
++#endif
++
+ /*
+  * Find a state object for an IKEv2 state.
+  * Note: only finds parent states.
+diff -urNp openswan-2.6.32-cvs-patched/programs/pluto/state.h openswan-2.6.32-current/programs/pluto/state.h
+--- openswan-2.6.32-cvs-patched/programs/pluto/state.h	2011-03-02 10:22:54.146529314 -0500
++++ openswan-2.6.32-current/programs/pluto/state.h	2011-02-22 11:31:38.458261841 -0500
+@@ -166,6 +166,21 @@ struct traffic_selector {
+     ip_address high;
+ };
+ 
++#ifdef HAVE_LABELED_IPSEC
++/* security label length should not exceed 256 in most cases,
++ * (discussed with kernel and selinux people).
++ */
++#define MAX_SECCTX_LEN    257 /* including '\0'*/
++struct xfrm_user_sec_ctx_ike {
++    u_int16_t len;
++    u_int16_t exttype;
++    u_int8_t  ctx_alg;  /* LSMs: e.g., selinux == 1 */
++    u_int8_t  ctx_doi;
++    u_int16_t ctx_len;
++    char sec_ctx_value[MAX_SECCTX_LEN];
++};
++#endif
++
+ /* state object: record the state of a (possibly nascent) SA
+  *
+  * Invariants (violated only during short transitions):
+@@ -260,6 +275,10 @@ struct state
+     chunk_t            st_firstpacket_me;      /* copy of my message 1 */
+     chunk_t            st_firstpacket_him;     /* copy of his message 1 */
+ 
++#ifdef HAVE_LABELED_IPSEC
++     struct xfrm_user_sec_ctx_ike *sec_ctx;
++#endif
++
+     /* Phase 2 ID payload info about my user */
+     u_int8_t           st_myuserprotoid;       /* IDcx.protoid */
+     u_int16_t          st_myuserport;
+@@ -405,6 +424,13 @@ extern struct state
+     *find_phase1_state(const struct connection *c, lset_t ok_states),
+     *find_sender(size_t packet_len, u_char *packet);
+ 
++#ifdef HAVE_LABELED_IPSEC
++extern struct state *find_state_ikev1_loopback(const u_char *icookie
++                 , const u_char *rcookie
++                 , const ip_address *peer UNUSED
++                 , msgid_t msgid
++                 , struct msg_digest *md);
++#endif
+ extern struct state *find_state_ikev2_parent(const u_char *icookie
+ 					     , const u_char *rcookie);
+ 
+diff -urNp openswan-2.6.32-cvs-patched/programs/pluto/whack.c openswan-2.6.32-current/programs/pluto/whack.c
+--- openswan-2.6.32-cvs-patched/programs/pluto/whack.c	2011-03-02 10:22:54.253540930 -0500
++++ openswan-2.6.32-current/programs/pluto/whack.c	2011-02-22 11:31:38.463262140 -0500
+@@ -491,6 +491,9 @@ enum option_enums {
+     CD_PFSGROUP,
+     CD_REMOTEPEERTYPE,
+     CD_NMCONFIGURED,
++    CD_LOOPBACK,
++    CD_LABELED_IPSEC,
++    CD_POLICY_LABEL,
+     CD_ESP	
+ #   define CD_LAST CD_ESP	/* last connection description */
+ 
+@@ -708,6 +711,11 @@ static const struct option long_opts[] =
+ #ifdef HAVE_NM
+     { "nm_configured", no_argument, NULL, CD_NMCONFIGURED + OO},
+ #endif
++#ifdef HAVE_LABELED_IPSEC
++    { "loopback", no_argument, NULL, CD_LOOPBACK + OO},
++    { "labeledipsec", no_argument, NULL, CD_LABELED_IPSEC + OO},
++    { "policylabel", required_argument, NULL, CD_POLICY_LABEL + OO },
++#endif
+ #ifdef DEBUG
+     { "debug-none", no_argument, NULL, DBGOPT_NONE + OO },
+     { "debug-all]", no_argument, NULL, DBGOPT_ALL + OO },
+@@ -921,6 +929,12 @@ main(int argc, char **argv)
+     msg.nmconfigured = NO;
+ #endif
+ 
++#ifdef HAVE_LABELED_IPSEC
++    msg.loopback = LB_NO;
++    msg.labeled_ipsec = LI_NO;
++    msg.policy_label = NULL;
++#endif
++
+     msg.sa_ike_life_seconds = OAKLEY_ISAKMP_SA_LIFETIME_DEFAULT;
+     msg.sa_ipsec_life_seconds = PLUTO_SA_LIFE_DURATION_DEFAULT;
+     msg.sa_rekey_margin = SA_REPLACEMENT_MARGIN_DEFAULT;
+@@ -1542,6 +1556,20 @@ main(int argc, char **argv)
+ 		continue;
+ #endif
+ 
++#ifdef HAVE_LABELED_IPSEC
++	case CD_LOOPBACK:
++		msg.loopback = LB_YES;
++		continue;
++
++        case CD_LABELED_IPSEC:
++                msg.labeled_ipsec = LI_YES;
++                continue;
++
++        case CD_POLICY_LABEL:
++                msg.policy_label = optarg;
++                continue;
++#endif
++
+ 	case CD_CONNIPV4:
+ 	    if (LHAS(cd_seen, CD_CONNIPV6 - CD_FIRST))
+ 		diag("--ipv4 conflicts with --ipv6");
+diff -urNp openswan-2.6.32-cvs-patched/programs/pluto/whackinit.c openswan-2.6.32-current/programs/pluto/whackinit.c
+--- openswan-2.6.32-cvs-patched/programs/pluto/whackinit.c	2011-03-02 10:22:54.234529391 -0500
++++ openswan-2.6.32-current/programs/pluto/whackinit.c	2011-02-22 11:31:38.462261801 -0500
+@@ -406,6 +406,10 @@ main(int argc, char **argv)
+     msg.ike = NULL;
+     msg.pfsgroup = NULL;
+ 
++#ifdef HAVE_LABELED_IPSEC
++   msg.policy_label=NULL;
++#endif
++
+     msg.sa_ike_life_seconds = OAKLEY_ISAKMP_SA_LIFETIME_DEFAULT;
+     msg.sa_ipsec_life_seconds = PLUTO_SA_LIFE_DURATION_DEFAULT;
+     msg.sa_rekey_margin = SA_REPLACEMENT_MARGIN_DEFAULT;
+diff -urNp openswan-2.6.32-cvs-patched/programs/_plutorun/_plutorun.in openswan-2.6.32-current/programs/_plutorun/_plutorun.in
+--- openswan-2.6.32-cvs-patched/programs/_plutorun/_plutorun.in	2011-03-02 10:22:54.416918990 -0500
++++ openswan-2.6.32-current/programs/_plutorun/_plutorun.in	2011-02-22 11:31:38.468261744 -0500
+@@ -55,6 +55,7 @@ do
+ 	--log)	                 wherelog="$2" ; shift	;;
+ 	--pid)	                 pidfile="$2" ; shift	;;
+ 	--nhelpers)              nhelpers="$2"; shift   ;;
++	--secctx_attr_value)     secctx_attr_value="$2"; shift   ;;
+ 	--)	                 shift ; break	;;
+ 	-*)	                 echo "$me: unknown option \`$1'" >&2 ; exit 2	;;
+ 	*)	                 break	;;
+@@ -143,7 +144,10 @@ then
+         popts="$popts --nhelpers $nhelpers"
+ fi
+ 
+-
++if test -n "$secctx_attr_value"
++then
++        popts="$popts --secctx_attr_value $secctx_attr_value"
++fi
+ 
+ if test -n "$stderrlog"
+ then
+diff -urNp openswan-2.6.32-cvs-patched/programs/_realsetup/_realsetup.in openswan-2.6.32-current/programs/_realsetup/_realsetup.in
+--- openswan-2.6.32-cvs-patched/programs/_realsetup/_realsetup.in	2011-03-02 10:22:53.689778016 -0500
++++ openswan-2.6.32-current/programs/_realsetup/_realsetup.in	2011-02-22 11:31:38.438261824 -0500
+@@ -324,6 +324,7 @@ case "$1" in
+ 			--crlcheckinterval "\"$IPSECcrlcheckinterval\"" \
+                         --ocspuri "\"$IPSECocspuri\"" \
+ 			--nhelpers "\"$IPSECnhelpers\"" \
++			--secctx_attr_value "\"$IPSECsecctx_attr_value\"" \
+ 			--dump "\"$IPSECdumpdir\"" \
+ 			--opts "\"$IPSECplutoopts\"" \
+ 			--stderrlog "\"$IPSECplutostderrlog\"" \

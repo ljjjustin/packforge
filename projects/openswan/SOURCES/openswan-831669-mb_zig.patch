@@ -1,0 +1,138 @@
+diff -Naur openswan-2.6.32-orig/include/packet.h openswan-2.6.32/include/packet.h
+--- openswan-2.6.32-orig/include/packet.h	2013-05-19 13:58:58.982465857 -0400
++++ openswan-2.6.32/include/packet.h	2013-05-19 14:01:00.153248796 -0400
+@@ -36,7 +36,7 @@
+  */
+ 
+ enum field_type {
+-    ft_mbz,	/* must be zero */
++    ft_mbz,	/* must be zero, abort */
+     ft_nat,	/* natural number (may be 0) */
+     ft_len,	/* length of this struct and any following crud */
+     ft_lv,	/* length/value field of attribute */
+@@ -46,6 +46,7 @@
+     ft_af_loose_enum, /* Attribute Format + enumeration, some names known */
+     ft_set,	/* bits representing set */
+     ft_raw,	/* bytes to be left in network-order */
++    ft_zig,	/* should be zero, ignore if not. Continue */
+     ft_end,	/* end of field list */
+ };
+ 
+diff -Naur openswan-2.6.32-orig/lib/libpluto/packet.c openswan-2.6.32/lib/libpluto/packet.c
+--- openswan-2.6.32-orig/lib/libpluto/packet.c	2013-05-19 13:58:58.985465901 -0400
++++ openswan-2.6.32/lib/libpluto/packet.c	2013-05-19 14:01:00.154248811 -0400
+@@ -598,10 +598,10 @@
+  */
+ static field_desc isanat_oa_fields[] = {
+     { ft_enum, 8/BITS_PER_BYTE, "next payload type", &payload_names },
+-    { ft_mbz, 8/BITS_PER_BYTE, NULL, NULL },
++    { ft_zig, 8/BITS_PER_BYTE, NULL, NULL }, /* Need ft_zig because ipsec-tools bug used in Android ICS */
+     { ft_len, 16/BITS_PER_BYTE, "length", NULL },
+     { ft_enum, 8/BITS_PER_BYTE, "ID type", &ident_names },
+-    { ft_mbz, 24/BITS_PER_BYTE, NULL, NULL },
++    { ft_zig, 24/BITS_PER_BYTE, NULL, NULL }, /* Need ft_zig because ipsec-tools bug used in Android ICS */
+     { ft_end, 0, NULL, NULL }
+ };
+ 
+@@ -691,7 +691,7 @@
+  */
+ static field_desc ikev2prop_fields[] = {
+     { ft_enum, 8/BITS_PER_BYTE, "next payload type", &payload_names },
+-    { ft_mbz,  8/BITS_PER_BYTE, NULL, NULL },
++    { ft_zig,  8/BITS_PER_BYTE, NULL, NULL },
+     { ft_len, 16/BITS_PER_BYTE, "length", NULL },
+     { ft_nat,  8/BITS_PER_BYTE, "prop #", NULL },
+     { ft_nat,  8/BITS_PER_BYTE, "proto ID", NULL },
+@@ -722,10 +722,10 @@
+  */
+ static field_desc ikev2trans_fields[] = {
+     { ft_enum, 8/BITS_PER_BYTE, "next payload type", &payload_names },
+-    { ft_mbz,  8/BITS_PER_BYTE, NULL, NULL },
++    { ft_zig,  8/BITS_PER_BYTE, NULL, NULL },
+     { ft_len, 16/BITS_PER_BYTE, "length", NULL },
+     { ft_nat,  8/BITS_PER_BYTE, "transform type", &trans_type_names },
+-    { ft_mbz,  8/BITS_PER_BYTE, NULL, NULL },
++    { ft_zig,  8/BITS_PER_BYTE, NULL, NULL },
+     { ft_nat, 16/BITS_PER_BYTE, "transform ID", NULL },
+     { ft_end,  0, NULL, NULL }
+ };
+@@ -785,7 +785,7 @@
+     { ft_set, 8/BITS_PER_BYTE, "critical bit", critical_names},
+     { ft_len, 16/BITS_PER_BYTE, "length", NULL },
+     { ft_nat, 16/BITS_PER_BYTE, "transform type", &oakley_group_names },
+-    { ft_mbz, 16/BITS_PER_BYTE, NULL, NULL },
++    { ft_zig, 16/BITS_PER_BYTE, NULL, NULL },
+     { ft_end,  0, NULL, NULL }
+ };
+ 
+@@ -829,8 +829,8 @@
+     { ft_set, 8/BITS_PER_BYTE, "critical bit", critical_names},
+     { ft_len, 16/BITS_PER_BYTE, "length", NULL },
+     { ft_enum, 8/BITS_PER_BYTE, "id_type", &ident_names },
+-    { ft_mbz,  8/BITS_PER_BYTE, NULL, NULL },
+-    { ft_mbz, 16/BITS_PER_BYTE, NULL, NULL },
++    { ft_zig,  8/BITS_PER_BYTE, NULL, NULL },
++    { ft_zig, 16/BITS_PER_BYTE, NULL, NULL },
+     { ft_end,  0, NULL, NULL }
+ };
+ 
+@@ -915,8 +915,8 @@
+     { ft_set, 8/BITS_PER_BYTE, "critical bit", critical_names},
+     { ft_len, 16/BITS_PER_BYTE, "length", NULL },
+     { ft_enum, 8/BITS_PER_BYTE, "auth method", &ikev2_auth_names },
+-    { ft_mbz,  8/BITS_PER_BYTE, NULL, NULL },
+-    { ft_mbz, 16/BITS_PER_BYTE, NULL, NULL },
++    { ft_zig,  8/BITS_PER_BYTE, NULL, NULL },
++    { ft_zig, 16/BITS_PER_BYTE, NULL, NULL },
+     { ft_end,  0, NULL, NULL }
+ };
+ 
+@@ -1063,8 +1063,8 @@
+     { ft_set, 8/BITS_PER_BYTE, "critical bit", critical_names},
+     { ft_len, 16/BITS_PER_BYTE, "length", NULL },
+     { ft_nat,  8/BITS_PER_BYTE, "number of TS", NULL},
+-    { ft_mbz,  8/BITS_PER_BYTE, NULL, NULL },
+-    { ft_mbz, 16/BITS_PER_BYTE, NULL, NULL },
++    { ft_zig,  8/BITS_PER_BYTE, NULL, NULL },
++    { ft_zig, 16/BITS_PER_BYTE, NULL, NULL },
+     { ft_end,  0, NULL, NULL }
+ };
+ struct_desc ikev2_ts_desc = { "IKEv2 Traffic Selectors",
+@@ -1218,6 +1218,7 @@
+ 	switch (fp->field_type)
+ 	{
+ 	case ft_mbz:	/* must be zero */
++	case ft_zig:
+ 	    inp += i;
+ 	    break;
+ 	case ft_nat:	/* natural number (may be 0) */
+@@ -1385,6 +1386,21 @@
+ 		    *outp++ = '\0';	/* probably redundant */
+ 		}
+ 		break;
++	    case ft_zig:	/* should be zero, ignore if not */
++		for (; i != 0; i--)
++		{
++		    if (*cur++ != 0)
++		    {
++			openswan_log("byte %d of %s should have been zero, but was not"
++			    , (int) (cur - ins->cur), sd->name);
++			/*
++			 * We cannot zeroize it, it would break our hash calculation 
++			 * *cur = '\0';
++			 */
++		    }
++		    *outp++ = '\0';	/* probably redundant */
++		}
++		break;
+ 
+ 	    case ft_nat:	/* natural number (may be 0) */
+ 	    case ft_len:	/* length of this struct and any following crud */
+@@ -1599,6 +1615,7 @@
+ 	    switch (fp->field_type)
+ 	    {
+ 	    case ft_mbz:	/* must be zero */
++	    case ft_zig:	/* should be zero, but we'll let it go */
+ 		inp += i;
+ 		for (; i != 0; i--)
+ 		    *cur++ = '\0';

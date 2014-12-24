@@ -1,0 +1,844 @@
+diff -urNp openswan-2.6.32-patched/include/ietf_constants.h openswan-2.6.32-current/include/ietf_constants.h
+--- openswan-2.6.32-patched/include/ietf_constants.h	2012-02-15 13:36:20.183547552 -0500
++++ openswan-2.6.32-current/include/ietf_constants.h	2012-04-20 00:49:24.977659174 -0400
+@@ -782,6 +782,8 @@ enum ikev1_auth_attribute {
+ 	AUTH_ALGORITHM_HMAC_SHA2_512=7,
+ 	AUTH_ALGORITHM_HMAC_RIPEMD=8,
+ 	AUTH_ALGORITHM_AES_CBC=9,
++	AUTH_ALGORITHM_NULL_KAME=251, /* why do we load this ? */
++	AUTH_ALGORITHM_HMAC_SHA2_256_TRUNCBUG=252,
+ };
+ 
+ typedef u_int16_t ipsec_auth_t;
+diff -urNp openswan-2.6.32-patched/include/ipsecconf/keywords.h openswan-2.6.32-current/include/ipsecconf/keywords.h
+--- openswan-2.6.32-patched/include/ipsecconf/keywords.h	2012-02-15 13:36:20.187547554 -0500
++++ openswan-2.6.32-current/include/ipsecconf/keywords.h	2012-04-18 12:23:48.409290119 -0400
+@@ -88,6 +88,7 @@ enum keyword_numeric_config_field {
+     KBF_KEYEXCHANGE,
+     KBF_AUTO,
+     KBF_PFS,
++    KBF_SHA2_TRUNCBUG,
+     KBF_SALIFETIME,
+     KBF_REKEY,
+     KBF_REKEYMARGIN,
+diff -urNp openswan-2.6.32-patched/include/linux/pfkeyv2.h openswan-2.6.32-current/include/linux/pfkeyv2.h
+--- openswan-2.6.32-patched/include/linux/pfkeyv2.h	2012-02-15 13:36:20.181547553 -0500
++++ openswan-2.6.32-current/include/linux/pfkeyv2.h	2012-04-20 02:25:05.686198832 -0400
+@@ -278,7 +278,8 @@ struct sadb_x_nat_t_port {
+ #define SADB_X_AALG_SHA2_512HMAC	7
+ #define SADB_X_AALG_RIPEMD160HMAC	8
+ #define SADB_X_AALG_NULL		251	/* kame */
+-#define SADB_AALG_MAX			251
++#define SADB_X_AALG_SHA2_256HMAC_TRUNCBUG	252
++#define SADB_AALG_MAX			255 /* while the AUTH_ALGORITHM is two octets, what is the SADB_AALG? */
+ 
+ /* Encryption algorithms */
+ #define SADB_EALG_NONE			0
+diff -urNp openswan-2.6.32-patched/include/pluto_constants.h openswan-2.6.32-current/include/pluto_constants.h
+--- openswan-2.6.32-patched/include/pluto_constants.h	2012-04-18 12:06:37.176244231 -0400
++++ openswan-2.6.32-current/include/pluto_constants.h	2012-04-20 00:20:54.630314261 -0400
+@@ -48,6 +48,11 @@ enum keyword_remotepeertype {
+     CISCO  = 1,
+ };
+ 
++enum keyword_sha2_truncbug {
++    SHA2_TRUNCBUG_NO = 0,
++    SHA2_TRUNCBUG_YES = 1,
++};
++
+ /* Network Manager support */
+ enum keyword_nmconfigured {
+     NO = 0,
+diff -urNp openswan-2.6.32-patched/include/whack.h openswan-2.6.32-current/include/whack.h
+--- openswan-2.6.32-patched/include/whack.h	2012-02-15 13:36:20.182547552 -0500
++++ openswan-2.6.32-current/include/whack.h	2012-04-20 00:23:02.930351156 -0400
+@@ -132,6 +132,8 @@ struct whack_message {
+     /* Force the use of NAT-T on a connection */
+     bool forceencaps;
+ 
++    enum keyword_sha2_truncbug sha2_truncbug;
++
+     /*Checking if this connection is configured by Network Manager*/
+     enum keyword_nmconfigured nmconfigured;
+ 
+diff -urNp openswan-2.6.32-patched/lib/libipsecconf/confread.c openswan-2.6.32-current/lib/libipsecconf/confread.c
+--- openswan-2.6.32-patched/lib/libipsecconf/confread.c	2012-02-15 13:36:19.429547519 -0500
++++ openswan-2.6.32-current/lib/libipsecconf/confread.c	2012-04-20 00:24:31.486373883 -0400
+@@ -76,6 +76,8 @@ void ipsecconf_default_values(struct sta
+ 	/*Cisco interop: remote peer type*/
+ 	cfg->conn_default.options[KBF_REMOTEPEERTYPE] = NON_CISCO;
+ 
++	cfg->conn_default.options[KBF_SHA2_TRUNCBUG] = SHA2_TRUNCBUG_NO;
++
+ 	/*Network Manager support*/
+ #ifdef HAVE_NM
+ 	cfg->conn_default.options[KBF_NMCONFIGURED] = NO;
+diff -urNp openswan-2.6.32-patched/lib/libipsecconf/keywords.c openswan-2.6.32-current/lib/libipsecconf/keywords.c
+--- openswan-2.6.32-patched/lib/libipsecconf/keywords.c	2012-02-15 13:36:19.429547519 -0500
++++ openswan-2.6.32-current/lib/libipsecconf/keywords.c	2012-04-20 00:25:26.245386842 -0400
+@@ -200,6 +200,14 @@ struct keyword_enum_value kw_remote_peer
+ struct keyword_enum_values kw_remote_peer_type=
+     { kw_remote_peer_type_list, sizeof(kw_remote_peer_type_list)/sizeof(struct keyword_enum_value)};
+ 
++struct keyword_enum_value kw_sha2_truncbug_list[]={
++    { "yes",         SHA2_TRUNCBUG_YES },
++    { "no",         SHA2_TRUNCBUG_NO },
++};
++
++struct keyword_enum_values kw_sha2_truncbug=
++    { kw_sha2_truncbug_list, sizeof(kw_sha2_truncbug_list)/sizeof(struct keyword_enum_value)};
++
+  /*
+   *  Network Manager support
+   */ 
+@@ -398,6 +406,7 @@ struct keyword_def ipsec_conf_keywords_v
+     {"ikev2",          kv_conn|kv_auto|kv_processed,kt_enum,KBF_IKEv2,&kw_fourvalued_list},
+     {"sareftrack",     kv_conn|kv_auto|kv_processed,kt_enum,KBF_SAREFTRACK,&kw_sareftrack_list},
+     {"pfs",            kv_conn|kv_auto, kt_bool,   KBF_PFS,          NOT_ENUM},
++    {"sha2_truncbug",  kv_conn|kv_auto, kt_enum,   KBF_SHA2_TRUNCBUG,          &kw_sha2_truncbug},
+     {"keylife",        kv_conn|kv_auto|kv_alias, kt_time,   KBF_SALIFETIME,NOT_ENUM},
+     {"lifetime",       kv_conn|kv_auto|kv_alias, kt_time,   KBF_SALIFETIME,NOT_ENUM},
+     {"salifetime",     kv_conn|kv_auto, kt_time,   KBF_SALIFETIME,NOT_ENUM},
+diff -urNp openswan-2.6.32-patched/lib/libipsecconf/starterwhack.c openswan-2.6.32-current/lib/libipsecconf/starterwhack.c
+--- openswan-2.6.32-patched/lib/libipsecconf/starterwhack.c	2012-02-15 13:36:19.433547519 -0500
++++ openswan-2.6.32-current/lib/libipsecconf/starterwhack.c	2012-04-20 00:26:02.340394933 -0400
+@@ -521,6 +521,10 @@ static int starter_whack_basic_add_conn(
+ 		msg.remotepeertype=conn->options[KBF_REMOTEPEERTYPE];
+ 	}
+ 
++	if(conn->options_set[KBF_SHA2_TRUNCBUG]) {
++		msg.sha2_truncbug=conn->options[KBF_SHA2_TRUNCBUG];
++	}
++
+ #ifdef HAVE_NM
+ 	/*Network Manager support*/
+ 	if(conn->options_set[KBF_NMCONFIGURED]) {
+diff -urNp openswan-2.6.32-patched/lib/libopenswan/constants.c openswan-2.6.32-current/lib/libopenswan/constants.c
+--- openswan-2.6.32-patched/lib/libopenswan/constants.c	2012-02-15 13:36:19.561547525 -0500
++++ openswan-2.6.32-current/lib/libopenswan/constants.c	2012-04-19 22:50:30.427241925 -0400
+@@ -1130,9 +1130,18 @@ const char *const trans_type_integ_name[
+     "auth-des-mac",
+     "auth-kpdk-md5",
+     "auth-aes-xcbc-96",
++    "AUTH_HMAC_MD5_128",
++    "AUTH_HMAC_SHA1_160",
++    "AUTH_AES_CMAC_96",
++    "AUTH_AES_128_GMAC",
++    "AUTH_AES_192_GMAC",
++    "AUTH_AES_256_GMAC",
++    "AUTH_HMAC_SHA2_256_128",
++    "AUTH_HMAC_SHA2_384_192",
++    "AUTH_HMAC_SHA2_512_256",
+ };
+ enum_names trans_type_integ_names =
+-{ IKEv2_AUTH_NONE, IKEv2_AUTH_AES_XCBC_96, trans_type_integ_name, NULL};
++{ IKEv2_AUTH_NONE, IKEv2_AUTH_HMAC_SHA2_512_256, trans_type_integ_name, NULL};
+ 
+ /* Transform-type Integrity */
+ const char *const trans_type_esn_name[]={
+diff -urNp openswan-2.6.32-patched/linux/include/openswan/pfkeyv2.h openswan-2.6.32-current/linux/include/openswan/pfkeyv2.h
+--- openswan-2.6.32-patched/linux/include/openswan/pfkeyv2.h	2012-02-15 13:36:20.165547525 -0500
++++ openswan-2.6.32-current/linux/include/openswan/pfkeyv2.h	2012-04-20 02:26:24.660167927 -0400
+@@ -271,16 +271,21 @@ enum sadb_sastate {
+ #define SADB_X_AALG_SHA2_512HMAC	7
+ #define SADB_X_AALG_RIPEMD160HMAC	8
+ #define SADB_X_AALG_NULL		251	/* kame */
++#define SADB_X_AALG_SHA2_256HMAC_TRUNCBUG	252 /* used internally to signal for broken linux kernel behaviour */
++
+ enum sadb_aalg {
+ 	K_SADB_AALG_NONE=          SADB_AALG_NONE,           	
+ 	K_SADB_AALG_MD5HMAC=       SADB_AALG_MD5HMAC,        	
+ 	K_SADB_AALG_SHA1HMAC=      SADB_AALG_SHA1HMAC,       	
+ 	K_SADB_X_AALG_SHA2_256HMAC=SADB_X_AALG_SHA2_256HMAC,
++	K_SADB_X_AALG_SHA2_256HMAC_TRUNCBUG=SADB_X_AALG_SHA2_256HMAC_TRUNCBUG,
+ 	K_SADB_X_AALG_SHA2_384HMAC=SADB_X_AALG_SHA2_384HMAC,
+ 	K_SADB_X_AALG_SHA2_512HMAC=SADB_X_AALG_SHA2_512HMAC,
+ 	K_SADB_X_AALG_RIPEMD160HMAC=SADB_X_AALG_RIPEMD160HMAC,
++	K_SADB_X_AALG_NULL=SADB_X_AALG_NULL,
+ };
+-#define K_SADB_AALG_MAX			251
++#define K_SADB_AALG_MAX			255 /* Is this really one octets, not two? */
++					    /* gets mapped into AUTH_ALGORITHM which is two octets */
+ 
+ #define SADB_EALG_NONE                  0
+ #define SADB_EALG_DESCBC                2
+diff -urNp openswan-2.6.32-patched/programs/_confread/d.ipsec.conf/order.txt openswan-2.6.32-current/programs/_confread/d.ipsec.conf/order.txt
+--- openswan-2.6.32-patched/programs/_confread/d.ipsec.conf/order.txt	2012-02-15 13:36:18.965547498 -0500
++++ openswan-2.6.32-current/programs/_confread/d.ipsec.conf/order.txt	2012-04-20 00:28:59.175429502 -0400
+@@ -19,6 +19,7 @@ d.ipsec.conf/authby.xml
+ d.ipsec.conf/ike.xml
+ d.ipsec.conf/phase2.xml
+ d.ipsec.conf/phase2alg.xml
++d.ipsec.conf/sha2_truncbug.xml
+ d.ipsec.conf/esp.xml
+ d.ipsec.conf/ah.xml
+ d.ipsec.conf/ikev2.xml
+diff -urNp openswan-2.6.32-patched/programs/_confread/d.ipsec.conf/sha2_truncbug.xml openswan-2.6.32-current/programs/_confread/d.ipsec.conf/sha2_truncbug.xml
+--- openswan-2.6.32-patched/programs/_confread/d.ipsec.conf/sha2_truncbug.xml	1969-12-31 19:00:00.000000000 -0500
++++ openswan-2.6.32-current/programs/_confread/d.ipsec.conf/sha2_truncbug.xml	2012-04-20 00:29:54.868438685 -0400
+@@ -0,0 +1,14 @@
++  <varlistentry>
++  <term><emphasis remap='B'>sha2_truncbug</emphasis></term>
++  <listitem>
++<para>The default hash truncation for sha2_256 is 128 bits. Linux
++implemented the draft version which stated 96 bits. This option enables
++using the bad 96 bits version to interop with older linux kernels
++(unpatched version 2.6.33 and older) and openswan versions before 2.6.38.
++Currently the accepted values are <emphasis remap='B'>no</emphasis>,
++(the default) signifying default IETF truncation of 128 bits, or <emphasis
++remap='B'>yes</emphasis>, signifying 96 bits broken Linux kernel style
++truncation.  </para>
++  </listitem>
++  </varlistentry>
++
+diff -urNp openswan-2.6.32-patched/programs/eroute/eroute.c openswan-2.6.32-current/programs/eroute/eroute.c
+--- openswan-2.6.32-patched/programs/eroute/eroute.c	2012-02-15 13:36:18.988547500 -0500
++++ openswan-2.6.32-current/programs/eroute/eroute.c	2012-04-20 01:48:42.618922110 -0400
+@@ -138,7 +138,7 @@ main(int argc, char **argv)
+ /*	int fd; */
+ 	char *endptr;
+ /*	int ret; */
+-	int c, previous = -1;
++	int c;
+ 	const char* error_s;
+ 
+ 	int error = 0;
+@@ -457,7 +457,6 @@ main(int argc, char **argv)
+ 		default:
+ 			break;
+ 		}
+-		previous = c;
+ 	}
+ 
+ 	if(debug) {
+diff -urNp openswan-2.6.32-patched/programs/ikeping/ikeping.c openswan-2.6.32-current/programs/ikeping/ikeping.c
+--- openswan-2.6.32-patched/programs/ikeping/ikeping.c	2012-02-15 13:36:18.945547499 -0500
++++ openswan-2.6.32-current/programs/ikeping/ikeping.c	2012-04-20 01:49:13.312917016 -0400
+@@ -303,10 +303,10 @@ main(int argc, char **argv)
+   int   afamily;
+   int   pfamily;
+   int   c;
+-  int   numSenders, numReceived, noDNS;
++  int   numSenders, numReceived;
+   int   natt;
+   int   waitTime;
+-  int   verbose, timedOut;
++  int   verbose;
+   ip_address laddr, raddr;
+   char *afam = "";
+ 
+@@ -318,10 +318,9 @@ main(int argc, char **argv)
+   verbose=0;
+   natt=0;
+   listen_only=0;
+-  noDNS=0;
+   bzero(&laddr, sizeof(laddr));
+ 
+-  while((c = getopt_long(argc, argv, "hVnvsp:b:46E:w:", long_opts, 0))!=EOF) {
++  while((c = getopt_long(argc, argv, "hVvsp:b:46E:w:", long_opts, 0))!=EOF) {
+       switch (c) {
+       case 'h':	        /* --help */
+ 	  help();
+@@ -335,10 +334,6 @@ main(int argc, char **argv)
+ 	  verbose++;
+ 	  continue;
+ 	  
+-      case 'n':
+-	  noDNS=1;
+-	  break;
+-	  
+       case 'T':
+ 	  natt++;
+ 	  break;
+@@ -483,7 +478,6 @@ main(int argc, char **argv)
+ 	  }
+   }
+ 
+-  timedOut = 0;
+   numReceived=0;
+ 
+   /* really should catch ^C and print stats on exit */
+diff -urNp openswan-2.6.32-patched/programs/klipsdebug/klipsdebug.c openswan-2.6.32-current/programs/klipsdebug/klipsdebug.c
+--- openswan-2.6.32-patched/programs/klipsdebug/klipsdebug.c	2012-02-15 13:36:19.003547500 -0500
++++ openswan-2.6.32-current/programs/klipsdebug/klipsdebug.c	2012-04-20 01:47:40.718932227 -0400
+@@ -112,9 +112,8 @@ main(int argc, char **argv)
+ {
+ /*	int fd; */
+ 	unsigned char action = 0;
+-	int c, previous = -1;
++	int c;
+ 	
+-	int debug = 0;
+ 	int error = 0;
+ 	int argcount = argc;
+ 	int em_db_tn, em_db_nl, em_db_xf, em_db_er, em_db_sp;
+@@ -134,7 +133,6 @@ main(int argc, char **argv)
+ 	while((c = getopt_long(argc, argv, ""/*"s:c:anhvl:+:d"*/, longopts, 0)) != EOF) {
+ 		switch(c) {
+ 		case 'd':
+-			debug = 1;
+ 			pfkey_lib_debug = PF_KEY_DEBUG_PARSE_MAX;
+ 			argcount--;
+ 			break;
+@@ -288,7 +286,6 @@ main(int argc, char **argv)
+ 					program_name, argv[optind]);
+ 			break;
+ 		}
+-		previous = c;
+ 	}
+ 
+ 	if(argcount == 1) {
+diff -urNp openswan-2.6.32-patched/programs/pluto/connections.c openswan-2.6.32-current/programs/pluto/connections.c
+--- openswan-2.6.32-patched/programs/pluto/connections.c	2012-04-18 12:06:37.177244230 -0400
++++ openswan-2.6.32-current/programs/pluto/connections.c	2012-04-20 00:33:49.864498930 -0400
+@@ -1340,6 +1340,8 @@ add_connection(const struct whack_messag
+         /* Cisco interop: remote peer type */
+         c->remotepeertype=wm->remotepeertype;
+ 
++	c->sha2_truncbug=wm->sha2_truncbug;
++
+         /* Network Manager support */
+ #ifdef HAVE_NM
+ 	c->nmconfigured=wm->nmconfigured;
+@@ -3342,14 +3344,16 @@ show_one_connection(struct connection *c
+     
+     whack_log(RC_COMMENT
+ 	      , "\"%s\"%s:   ike_life: %lus; ipsec_life: %lus;"
+-	      " rekey_margin: %lus; rekey_fuzz: %lu%%; keyingtries: %lu"
++	      " rekey_margin: %lus; rekey_fuzz: %lu%%; keyingtries: %lu%s "
+ 	      , c->name
+ 	      , instance
+ 	      , (unsigned long) c->sa_ike_life_seconds
+ 	      , (unsigned long) c->sa_ipsec_life_seconds
+ 	      , (unsigned long) c->sa_rekey_margin
+ 	      , (unsigned long) c->sa_rekey_fuzz
+-	      , (unsigned long) c->sa_keying_tries);
++	      , (unsigned long) c->sa_keying_tries
++	      , (c->sha2_truncbug) ? "; sha2_truncbug: yes" : ""
++	     );
+ 
+     if (c->policy_next)
+     {
+diff -urNp openswan-2.6.32-patched/programs/pluto/connections.h openswan-2.6.32-current/programs/pluto/connections.h
+--- openswan-2.6.32-patched/programs/pluto/connections.h	2012-04-18 12:06:37.185244230 -0400
++++ openswan-2.6.32-current/programs/pluto/connections.h	2012-04-20 00:34:31.518510990 -0400
+@@ -205,6 +205,8 @@ struct connection {
+     /*Cisco interop: remote peer type*/
+     enum keyword_remotepeertype remotepeertype;
+ 
++    enum keyword_sha2_truncbug sha2_truncbug;
++
+     /*Network Manager support*/
+ #ifdef HAVE_NM
+     enum keyword_nmconfigured nmconfigured;
+diff -urNp openswan-2.6.32-patched/programs/pluto/kernel_bsdkame.c openswan-2.6.32-current/programs/pluto/kernel_bsdkame.c
+--- openswan-2.6.32-patched/programs/pluto/kernel_bsdkame.c	2012-02-15 13:36:18.777547491 -0500
++++ openswan-2.6.32-current/programs/pluto/kernel_bsdkame.c	2012-04-20 00:39:54.726588251 -0400
+@@ -1122,7 +1122,8 @@ const struct kernel_ops bsdkame_kernel_o
+     set_debug: bsdkame_set_debug,
+     remove_orphaned_holds: bsdkame_remove_orphaned_holds,
+     process_ifaces: bsdkame_process_raw_ifaces,
+-    .overlap_supported = FALSE
++    overlap_supported: FALSE,
++    sha2_truncbug_support: FALSE,
+ };
+ 
+ 
+diff -urNp openswan-2.6.32-patched/programs/pluto/kernel.c openswan-2.6.32-current/programs/pluto/kernel.c
+--- openswan-2.6.32-patched/programs/pluto/kernel.c	2012-04-18 12:06:37.189244232 -0400
++++ openswan-2.6.32-current/programs/pluto/kernel.c	2012-04-20 00:38:37.810572425 -0400
+@@ -1749,6 +1749,17 @@ setup_half_ipsec_sa(struct state *st, bo
+         said_next->esatype = ET_ESP;
+         said_next->replay_window = kernel_ops->replay_window;
+         said_next->authalg = ei->authalg;
++
++		if( (said_next->authalg == AUTH_ALGORITHM_HMAC_SHA2_256) && (st->st_connection->sha2_truncbug)) {
++			if(kernel_ops->sha2_truncbug_support){
++			   DBG_log(" authalg converted for sha2 truncation at 96bits instead of IETF's mandated 128bits");
++			   /* We need to tell the kernel to mangle the sha2_256, as instructed by the user */
++			   said_next->authalg = AUTH_ALGORITHM_HMAC_SHA2_256_TRUNCBUG;
++			} else {
++                   loglog(RC_LOG_SERIOUS, "Error: %s stack does not support sha2_truncbug=yes", kernel_ops->kern_name);
++		   	goto fail;
++			}
++		}
+         said_next->authkeylen = ei->authkeylen;
+         /* said_next->authkey = esp_dst_keymat + ei->enckeylen; */
+         said_next->authkey = esp_dst_keymat + key_len;
+diff -urNp openswan-2.6.32-patched/programs/pluto/kernel.h openswan-2.6.32-current/programs/pluto/kernel.h
+--- openswan-2.6.32-patched/programs/pluto/kernel.h	2012-02-15 13:36:18.728547499 -0500
++++ openswan-2.6.32-current/programs/pluto/kernel.h	2012-04-20 00:38:45.317574040 -0400
+@@ -129,6 +129,7 @@ struct kernel_ops {
+     bool inbound_eroute;
+     bool policy_lifetime;
+     bool overlap_supported;
++    bool sha2_truncbug_support;
+     int  replay_window;
+     int *async_fdp;
+     
+diff -urNp openswan-2.6.32-patched/programs/pluto/kernel_klips.c openswan-2.6.32-current/programs/pluto/kernel_klips.c
+--- openswan-2.6.32-patched/programs/pluto/kernel_klips.c	2012-02-15 13:36:18.653547484 -0500
++++ openswan-2.6.32-current/programs/pluto/kernel_klips.c	2012-04-20 00:40:03.931590041 -0400
+@@ -391,7 +391,8 @@ const struct kernel_ops klips_kernel_ops
+     remove_orphaned_holds: pfkey_remove_orphaned_holds,
+     process_ifaces: klips_process_raw_ifaces,
+     kern_name: "klips",
+-    .overlap_supported = FALSE
++    overlap_supported: FALSE,
++    sha2_truncbug_support: FALSE,
+ };
+ #endif /* KLIPS */
+ 
+diff -urNp openswan-2.6.32-patched/programs/pluto/kernel_mast.c openswan-2.6.32-current/programs/pluto/kernel_mast.c
+--- openswan-2.6.32-patched/programs/pluto/kernel_mast.c	2012-02-15 13:36:18.762547491 -0500
++++ openswan-2.6.32-current/programs/pluto/kernel_mast.c	2012-04-20 00:40:11.060591412 -0400
+@@ -637,6 +637,7 @@ const struct kernel_ops mast_kernel_ops 
+     remove_orphaned_holds: pfkey_remove_orphaned_holds,
+     process_ifaces: mast_process_raw_ifaces,
+     kern_name: "mast",
+-    .overlap_supported = TRUE
++    overlap_supported: TRUE,
++    sha2_truncbug_support: FALSE,
+ };
+ #endif /* KLIPS */
+diff -urNp openswan-2.6.32-patched/programs/pluto/kernel_netlink.c openswan-2.6.32-current/programs/pluto/kernel_netlink.c
+--- openswan-2.6.32-patched/programs/pluto/kernel_netlink.c	2012-02-15 13:36:18.763547486 -0500
++++ openswan-2.6.32-current/programs/pluto/kernel_netlink.c	2012-04-20 02:28:00.591130398 -0400
+@@ -144,6 +144,7 @@ static sparse_names aalg_list = {
+ 	{ SADB_AALG_MD5HMAC, "md5" },
+ 	{ SADB_AALG_SHA1HMAC, "sha1" },
+ 	{ SADB_X_AALG_SHA2_256HMAC, "sha256" },
++	{ SADB_X_AALG_SHA2_256HMAC_TRUNCBUG, "hmac(sha256)" },
+ 	{ SADB_X_AALG_RIPEMD160HMAC, "ripemd160" },
+ 	{ 0, sparse_end }
+ };
+@@ -828,7 +829,6 @@ netlink_add_sa(struct kernel_sa *sa, boo
+ 
+     if (sa->authkeylen)
+     {
+-	struct xfrm_algo algo;
+ 	const char *name;
+ 
+ 	name = sparse_name(aalg_list, sa->authalg);
+@@ -838,18 +838,42 @@ netlink_add_sa(struct kernel_sa *sa, boo
+ 	    return FALSE;
+ 	}
+ 
+-	strcpy(algo.alg_name, name);
++	/*
++	 * According to RFC-4868 the hash should be nnn/2, so 128 bits for SHA256 and 256
++	 * for SHA512. The XFRM/NETKEY kernel uses a default of 96, which was the value in
++	 * an earlier draft. The kernel then introduced a new struct xfrm_algo_auth to
++	 * replace struct xfrm_algo to deal with this 
++	 */
++	if(sa->authalg == AUTH_ALGORITHM_HMAC_SHA2_256_TRUNCBUG) {
++	struct xfrm_algo_auth algo;
++	DBG(DBG_NETKEY, DBG_log("  using new struct xfrm_algo_auth for XFRM message with explicit truncation for sha2_256"));
+ 	algo.alg_key_len = sa->authkeylen * BITS_PER_BYTE;
++	algo.alg_trunc_len = 128;
++	attr->rta_type = XFRMA_ALG_AUTH_TRUNC;
++	attr->rta_len = RTA_LENGTH(sizeof(algo) + sa->authkeylen);
++	sa->authalg = AUTH_ALGORITHM_HMAC_SHA2_256; /* fixup to the real number, not our private number */
+ 
++	strcpy(algo.alg_name, name);
++	memcpy(RTA_DATA(attr), &algo, sizeof(algo));
++	memcpy((char *)RTA_DATA(attr) + sizeof(algo), sa->authkey
++	    , sa->authkeylen);
++
++	req.n.nlmsg_len += attr->rta_len;
++	attr = (struct rtattr *)((char *)attr + attr->rta_len);
++	} else {
++	struct xfrm_algo algo;
++	DBG(DBG_NETKEY, DBG_log("  using old struct xfrm_algo for XFRM message"));
++	algo.alg_key_len = sa->authkeylen * BITS_PER_BYTE;
+ 	attr->rta_type = XFRMA_ALG_AUTH;
+ 	attr->rta_len = RTA_LENGTH(sizeof(algo) + sa->authkeylen);
+-
++	strcpy(algo.alg_name, name);
+ 	memcpy(RTA_DATA(attr), &algo, sizeof(algo));
+ 	memcpy((char *)RTA_DATA(attr) + sizeof(algo), sa->authkey
+ 	    , sa->authkeylen);
+ 
+ 	req.n.nlmsg_len += attr->rta_len;
+ 	attr = (struct rtattr *)((char *)attr + attr->rta_len);
++	}
+     }
+ 
+     aead = get_aead_alg(sa->encalg);
+@@ -2194,6 +2218,7 @@ const struct kernel_ops netkey_kernel_op
+      * if netlink  specific changes are needed.
+      */
+     remove_orphaned_holds: pfkey_remove_orphaned_holds,
+-    .overlap_supported = FALSE
++    overlap_supported: FALSE,
++    sha2_truncbug_support: TRUE,
+ };
+ #endif /* linux && NETKEY_SUPPORT */
+diff -urNp openswan-2.6.32-patched/programs/pluto/kernel_noklips.c openswan-2.6.32-current/programs/pluto/kernel_noklips.c
+--- openswan-2.6.32-patched/programs/pluto/kernel_noklips.c	2012-02-15 13:36:18.762547491 -0500
++++ openswan-2.6.32-current/programs/pluto/kernel_noklips.c	2012-04-20 00:44:25.981631900 -0400
+@@ -155,7 +155,8 @@ const struct kernel_ops noklips_kernel_o
+     exceptsocket: NULL,
+     docommand: NULL,
+     kern_name: "noklips",
+-    .overlap_supported = FALSE
++    overlap_supported: FALSE,
++    sha2_truncbug_support: FALSE,
+ };
+ 
+ 
+diff -urNp openswan-2.6.32-patched/programs/pluto/kernel_win2k.c openswan-2.6.32-current/programs/pluto/kernel_win2k.c
+--- openswan-2.6.32-patched/programs/pluto/kernel_win2k.c	2012-02-15 13:36:18.928547523 -0500
++++ openswan-2.6.32-current/programs/pluto/kernel_win2k.c	2012-04-20 00:44:45.562634340 -0400
+@@ -164,6 +164,7 @@ const struct kernel_ops win2k_kernel_ops
+     exceptsocket: NULL,
+     docommand: do_command_win2k,
+     opname: "win2k",
+-    .overlap_supported = FALSE
++    overlap_supported: FALSE,
++    sha2_truncbug_support: FALSE,
+ };
+ #endif /* WIN32_NATIVE */
+diff -urNp openswan-2.6.32-patched/programs/pluto/linux26/xfrm.h openswan-2.6.32-current/programs/pluto/linux26/xfrm.h
+--- openswan-2.6.32-patched/programs/pluto/linux26/xfrm.h	2012-02-15 13:36:18.769547494 -0500
++++ openswan-2.6.32-current/programs/pluto/linux26/xfrm.h	2012-04-20 01:05:22.732616414 -0400
+@@ -92,10 +92,16 @@ struct xfrm_replay_state
+ 
+ struct xfrm_algo {
+ 	char	alg_name[64];
+-	int	alg_key_len;    /* in bits */
++	unsigned int	alg_key_len;    /* in bits */
+ 	char	alg_key[0];
+ };
+ 
++struct xfrm_algo_auth {
++	char	alg_name[64];
++	unsigned int	alg_key_len; /* in bits */
++	unsigned int	alg_trunc_len; /* in bits */
++	char alg_key[0];
++};
+ 
+ struct xfrm_algo_aead {
+ 	char    alg_name[64];
+@@ -204,6 +210,11 @@ enum xfrm_attr_type_t {
+ 	XFRMA_POLICY_TYPE,      /* struct xfrm_userpolicy_type */
+ 	XFRMA_MIGRATE,
+ 	XFRMA_ALG_AEAD,         /* struct xfrm_algo_aead */
++	XFRMA_KMADDRESS,        /* struct xfrm_user_kmaddress */
++	XFRMA_ALG_AUTH_TRUNC,	/* struct xfrm_algo_auth */
++	XFRMA_MARK,		/* struct xfrm_mark */
++	XFRMA_TFCPAD,		/* __u32 */
++	XFRMA_REPLAY_ESN_VAL,	/* struct xfrm_replay_esn */
+ 	__XFRMA_MAX
+ 
+ #define XFRMA_MAX (__XFRMA_MAX - 1)
+diff -urNp openswan-2.6.32-patched/programs/pluto/Makefile.options openswan-2.6.32-current/programs/pluto/Makefile.options
+--- openswan-2.6.32-patched/programs/pluto/Makefile.options	2012-02-15 13:36:18.773547489 -0500
++++ openswan-2.6.32-current/programs/pluto/Makefile.options	2012-04-20 01:32:53.614053166 -0400
+@@ -175,7 +175,8 @@ X509_DEFS=-DX509_PLUTO
+ 
+ # dynamic LDAP CRL fetching requires OpenLDAP library
+ ifeq ($(USE_LDAP),true)
+-X509_LLIBS+= -lldap
++X509_LLIBS+= -lldap -llber
++PLUTOMINUSL+= -llber
+ ifdef LDAP_VERSION
+ X509_DEFS+= -DLDAP_VER=$(LDAP_VERSION)
+ endif
+diff -urNp openswan-2.6.32-patched/programs/pluto/spdb.h openswan-2.6.32-current/programs/pluto/spdb.h
+--- openswan-2.6.32-patched/programs/pluto/spdb.h	2012-02-15 13:36:18.641547484 -0500
++++ openswan-2.6.32-current/programs/pluto/spdb.h	2012-04-19 22:22:45.435809306 -0400
+@@ -190,6 +190,7 @@ extern void sa_v2_print(struct db_sa *f)
+ extern struct db_sa *sa_v2_convert(struct db_sa *f);
+ extern enum ikev2_trans_type_encr v1tov2_encr(int oakley);
+ extern enum ikev2_trans_type_integ v1tov2_integ(int oakley);
++extern enum ikev2_trans_type_integ v1phase2tov2child_integ(int ikev1_phase2_auth);
+ extern bool ikev2_acceptable_group(struct state *st, oakley_group_t group);
+ 
+ 
+diff -urNp openswan-2.6.32-patched/programs/pluto/spdb_v2_struct.c openswan-2.6.32-current/programs/pluto/spdb_v2_struct.c
+--- openswan-2.6.32-patched/programs/pluto/spdb_v2_struct.c	2012-02-15 13:36:18.630547483 -0500
++++ openswan-2.6.32-current/programs/pluto/spdb_v2_struct.c	2012-04-20 02:51:47.862576426 -0400
+@@ -283,6 +283,21 @@ enum ikev2_trans_type_integ v1tov2_integ
+    }
+ }
+ 
++enum ikev2_trans_type_integ v1phase2tov2child_integ(int ikev1_phase2_auth)
++{
++    switch(ikev1_phase2_auth) {
++    case AUTH_ALGORITHM_HMAC_MD5:
++        return IKEv2_AUTH_HMAC_MD5_96;
++    case AUTH_ALGORITHM_HMAC_SHA1:
++        return IKEv2_AUTH_HMAC_SHA1_96;
++    case AUTH_ALGORITHM_HMAC_SHA2_256:
++        return IKEv2_AUTH_HMAC_SHA2_256_128;
++    default:
++        return IKEv2_AUTH_INVALID;
++   }
++}
++
++
+ static enum ikev2_trans_type_prf v1tov2_prf(int oakley)
+ {
+     switch(oakley) {
+@@ -380,7 +395,7 @@ struct db_sa *sa_v2_convert(struct db_sa
+ 		    } else {
+ 			switch(attr->type.ipsec) {
+ 			case AUTH_ALGORITHM:
+-			    dtfone->integ_transid = attr->val;
++			    dtfone->integ_transid = v1phase2tov2child_integ(attr->val);
+ 			    break;
+ 			    
+ 			case KEY_LENGTH:
+@@ -1233,7 +1248,7 @@ ikev2_parse_child_sa_body(
+     bool conjunction, gotmatch, oldgotmatch;
+     struct ikev2_prop winning_prop;
+     struct db_sa *p2alg;
+-    struct trans_attrs ta;
++    struct trans_attrs ta, ta1;
+     struct connection *c = st->st_connection;
+     struct ikev2_transform_list itl0, *itl;
+ 
+@@ -1250,6 +1265,7 @@ ikev2_parse_child_sa_body(
+     gotmatch = FALSE;
+     conjunction = FALSE;
+     zero(&ta);
++    zero(&ta1);
+ 
+     while(np == ISAKMP_NEXT_P) {
+ 	/*
+@@ -1373,6 +1389,12 @@ ikev2_parse_child_sa_body(
+      * algorithms.
+      */
+     ta.integ_hash  = itl->integ_transforms[itl->integ_i];
++
++    /* here we obtain auth value for esp, 
++     * but loosse what is correct to be sent in the propoasl
++     * so preserve the winning proposal.
++     */
++    ta1 = ta;
+     ta.integ_hash  = alg_info_esp_v2tov1aa(ta.integ_hash);
+ 
+     st->st_esp.attrs.transattrs = ta;
+@@ -1387,7 +1409,7 @@ ikev2_parse_child_sa_body(
+     if (r_sa_pbs != NULL)
+     {
+ 	return ikev2_emit_winning_sa(st, r_sa_pbs
+-				     , ta
++				     , ta1
+ 				     , /*parentSA*/FALSE
+ 				     , winning_prop);
+     }
+diff -urNp openswan-2.6.32-patched/programs/pluto/whack.c openswan-2.6.32-current/programs/pluto/whack.c
+--- openswan-2.6.32-patched/programs/pluto/whack.c	2012-02-15 13:36:18.927547536 -0500
++++ openswan-2.6.32-current/programs/pluto/whack.c	2012-04-20 00:46:15.144644313 -0400
+@@ -490,6 +490,7 @@ enum option_enums {
+     CD_IKE,
+     CD_PFSGROUP,
+     CD_REMOTEPEERTYPE,
++    CD_SHA2_TRUNCBUG,
+     CD_NMCONFIGURED,
+     CD_LOOPBACK,
+     CD_LABELED_IPSEC,
+@@ -650,6 +651,7 @@ static const struct option long_opts[] =
+     { "tunnelipv4", no_argument, NULL, CD_TUNNELIPV4 + OO },
+     { "tunnelipv6", no_argument, NULL, CD_TUNNELIPV6 + OO },
+     { "pfs", no_argument, NULL, CD_PFS + OO },
++    { "sha2_truncbug", no_argument, NULL, CD_SHA2_TRUNCBUG + OO },
+     { "aggrmode", no_argument, NULL, CD_AGGRESSIVE + OO },
+     { "disablearrivalcheck", no_argument, NULL, CD_DISABLEARRIVALCHECK + OO },
+     { "initiateontraffic", no_argument, NULL
+@@ -924,6 +926,8 @@ main(int argc, char **argv)
+ 
+     msg.remotepeertype = NON_CISCO;
+ 
++    msg.sha2_truncbug = SHA2_TRUNCBUG_NO;
++
+     /*Network Manager support*/
+ #ifdef HAVE_NM
+     msg.nmconfigured = NO;
+@@ -1545,6 +1549,15 @@ main(int argc, char **argv)
+ 	    }
+ 	    continue;
+ 
++	case CD_SHA2_TRUNCBUG: /* --sha2_truncbug */
++	    if ( strcmp(optarg, "yes" ) == 0) {
++		msg.sha2_truncbug = SHA2_TRUNCBUG_YES;
++	    }
++	    else {
++		msg.sha2_truncbug = SHA2_TRUNCBUG_NO;
++	    }
++		continue;
++
+ #ifdef HAVE_NM
+ 	case CD_NMCONFIGURED: /* --nm_configured */
+ 	    if ( strcmp(optarg, "yes" ) == 0) {
+diff -urNp openswan-2.6.32-patched/programs/showpolicy/showpolicy.c openswan-2.6.32-current/programs/showpolicy/showpolicy.c
+--- openswan-2.6.32-patched/programs/showpolicy/showpolicy.c	2012-02-15 13:36:19.008547500 -0500
++++ openswan-2.6.32-current/programs/showpolicy/showpolicy.c	2012-04-20 01:29:28.885074077 -0400
+@@ -118,7 +118,7 @@ int udp_recv_loop(int udpsock)
+ 	
+ 	do {
+ 		struct sockaddr_in from, to;
+-		size_t fromlen, tolen;
++		size_t fromlen;
+ 		struct msghdr msgh;
+ 		struct iovec iov;
+ 		char cbuf[256];
+@@ -131,7 +131,6 @@ int udp_recv_loop(int udpsock)
+ 		memset(&to,   0, sizeof(to));
+ 
+ 		fromlen = sizeof(struct sockaddr_in);
+-		tolen   = sizeof(struct sockaddr_in);
+ 
+ 		memset(&msgh, 0, sizeof(struct msghdr));
+ 		iov.iov_base = buf;
+diff -urNp openswan-2.6.32-patched/programs/spi/spi.c openswan-2.6.32-current/programs/spi/spi.c
+--- openswan-2.6.32-patched/programs/spi/spi.c	2012-02-15 13:36:18.937547500 -0500
++++ openswan-2.6.32-current/programs/spi/spi.c	2012-04-20 01:46:09.194946791 -0400
+@@ -497,10 +497,9 @@ main(int argc, char *argv[])
+ {
+ 	char *endptr;
+ 	__u32 spi = 0;
+-	int c, previous = -1;
++	int c;
+ /*	int ret; */
+ 	ip_said said;
+-	size_t sa_len;
+ 	const char* error_s;
+ 	char ipaddr_txt[ADDRTOT_BUF];
+ 	char ipsaid_txt[SATOT_BUF];
+@@ -515,7 +514,7 @@ main(int argc, char *argv[])
+ 	unsigned char authalg, encryptalg;
+ 	struct sadb_ext *extensions[K_SADB_EXT_MAX + 1];
+ 	struct sadb_msg *pfkey_msg;
+-	char *iv_opt, *akey_opt, *ekey_opt, *alg_opt, *edst_opt, *spi_opt, *proto_opt, *af_opt, *said_opt, *dst_opt, *src_opt;
++	char *edst_opt, *spi_opt, *proto_opt, *af_opt, *said_opt, *dst_opt, *src_opt;
+ #if 0
+ 	ip_address pfkey_address_p_ska;
+ 	ip_address pfkey_ident_s_ska;
+@@ -537,7 +536,7 @@ main(int argc, char *argv[])
+ 	tool_init_log();
+ 
+ 	memset(&said, 0, sizeof(said));
+-	iv_opt = akey_opt = ekey_opt = alg_opt = edst_opt = spi_opt = proto_opt = af_opt = said_opt = dst_opt = src_opt = NULL;
++	edst_opt = spi_opt = proto_opt = af_opt = said_opt = dst_opt = src_opt = NULL;
+ 	{
+ 		int i,j;
+ 		for(i = 0; i < life_maxsever; i++) {
+@@ -633,7 +632,6 @@ main(int argc, char *argv[])
+ 					progname,
+ 					alg);
+ 			}
+-			alg_opt = optarg;
+ 			break;
+ 		case 'P':
+ 			if(alg) {
+@@ -649,7 +647,6 @@ main(int argc, char *argv[])
+ 					progname,
+ 					alg);
+ 			}
+-			alg_opt = optarg;
+ 			break;
+ 		case 'Z':
+ 			if(alg) {
+@@ -671,7 +668,6 @@ main(int argc, char *argv[])
+ 					progname,
+ 					alg);
+ 			}
+-			alg_opt = optarg;
+ 			break;
+ 		case '4':
+ 			if(alg) {
+@@ -686,7 +682,6 @@ main(int argc, char *argv[])
+ 					progname,
+ 					alg);
+ 			}
+-			alg_opt = optarg;
+ 			break;
+ 		case '6':
+ 			if(alg) {
+@@ -701,7 +696,6 @@ main(int argc, char *argv[])
+ 					progname,
+ 					alg);
+ 			}
+-			alg_opt = optarg;
+ 			break;
+ 		case 'd':
+ 			if(alg) {
+@@ -715,7 +709,6 @@ main(int argc, char *argv[])
+ 					progname,
+ 					alg);
+ 			}
+-			alg_opt = optarg;
+ 			break;
+ 		case 'c':
+ 			if(alg) {
+@@ -729,7 +722,6 @@ main(int argc, char *argv[])
+ 					progname,
+ 					alg);
+ 			}
+-			alg_opt = optarg;
+ 			break;
+ 		case 'e':
+ 			if(said_opt) {
+@@ -912,7 +904,6 @@ main(int argc, char *argv[])
+ 			}
+ 			memset(authkey, 0, authkeylen);
+ 			authkeylen = atodata(optarg, 0, (char *)authkey, authkeylen);
+-			akey_opt = optarg;
+ 			break;
+ 		case 'E':
+ 			if(optarg[0] == '0') {
+@@ -940,7 +931,6 @@ main(int argc, char *argv[])
+ 			}
+ 			memset(enckey, 0, enckeylen);
+ 			enckeylen = atodata(optarg, 0, (char *)enckey, enckeylen);
+-			ekey_opt = optarg;
+ 			break;
+ 		case 'w':
+ 			replay_window = strtoul(optarg, &endptr, 0);
+@@ -981,7 +971,6 @@ main(int argc, char *argv[])
+ 			}
+ 			memset(iv, 0, ivlen);
+ 			ivlen = atodata(optarg, 0, (char *)iv, ivlen);
+-			iv_opt = optarg;
+ 			break;
+ 		case 'D':
+ 			if(dst_opt) {
+@@ -1092,7 +1081,6 @@ main(int argc, char *argv[])
+ 				progname, c);
+ 			exit(1);
+ 		}
+-		previous = c;
+ 	}
+ 	if(debug) {
+ 		fprintf(stdout, "%s: All options processed.\n",
+@@ -1211,7 +1199,6 @@ main(int argc, char *argv[])
+ 				progname);
+ 			exit(1);
+ 		}
+-		sa_len = satot(&said, 0, sa, sizeof(sa));
+ 
+ 		if(debug) {
+ 			fprintf(stdout, "%s: SA valid.\n",
+diff -urNp openswan-2.6.32-patched/programs/tncfg/tncfg.c openswan-2.6.32-current/programs/tncfg/tncfg.c
+--- openswan-2.6.32-patched/programs/tncfg/tncfg.c	2012-02-15 13:36:19.003547500 -0500
++++ openswan-2.6.32-current/programs/tncfg/tncfg.c	2012-04-20 01:42:11.507982509 -0400
+@@ -178,7 +178,7 @@ main(int argc, char *argv[])
+ 	struct ifreq ifr;
+ 	struct ipsectunnelconf shc;
+ 	int s;
+-	int c, previous = -1;
++	int c;
+ 	int argcount = argc;
+ 	int createdelete = 0;
+ 	char virtname[64];
+@@ -255,7 +255,6 @@ main(int argc, char *argv[])
+ 			usage(progname);
+ 			break;
+ 		}
+-		previous = c;
+ 	}
+ 
+         if ( ((stat ("/proc/net/pfkey", &sts)) == 0) )  {
