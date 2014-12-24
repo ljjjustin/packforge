@@ -62,7 +62,7 @@ build_one_project() {
         fi
         pushd "${sourcesdir}" > /dev/null
         if [ ! -f "${source_code_tarball}" ]; then
-            wget -c -O "${source_code_tarball}" "${URL}"
+            wget --no-check-certificate -c -O "${source_code_tarball}" "${URL}"
         fi
         popd > /dev/null
     elif [ -n "${GITURL}" ]; then
