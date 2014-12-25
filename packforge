@@ -139,7 +139,7 @@ cleanup_on_exit() {
 
 
 # Parse options
-workers=0
+workers=1
 command=''
 project=''
 branch='master'

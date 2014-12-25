@@ -123,3 +123,31 @@ build_one_project() {
     ## Step 5: clean project
     popd > /dev/null
 }
+
+
+build_all_projects() {
+    local branch=${1:-master}
+    local strategy=${2:-commit}
+    local queue="/tmp/packforge/queue.$$"
+
+    ## create a FIFO pipe as queue
+    mkfifo "${queue}" && exec 3<> "${queue}"
+    rm -f "${queue}"
+
+    for ((i=0; i < $workers; i++)); do echo; done >&3
+
+    for project in $(ls "${TOPDIR}/projects")
+    do
+        read -u3
+        (
+            info "Building ${project} ..."
+            build_one_project "${project}" "${branch}" "${strategy}"
+            info "Building ${project} DONE"
+            echo >&3
+        ) &
+    done
+    wait
+
+    ## close FIFO pipe
+    exec 3>&-
+}
