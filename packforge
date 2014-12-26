@@ -160,6 +160,15 @@ mkdir -p /tmp/packforge && touch ${lockfile}
 
 trap "cleanup_on_exit" EXIT
 
+if [ -f "${TOPDIR}/packforgerc" ]; then
+    source  "${TOPDIR}/packforgerc"
+fi
+
+REPODIR=${REPODIR:-/tmp/repo}
+if [ ! -d "${REPODIR}" ]; then
+    mkdir -p "${REPODIR}"
+fi
+
 if [[ "all" == "${project}" ]]; then
     build_all_projects "${branch}" "${strategy}"
 else

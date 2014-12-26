@@ -48,5 +48,7 @@ error() {
 
 die() {
     local msg=$1
+    local status=$?
     echo -e "${COLOR_LIGHT_RED}${msg}${NO_COLOR}"
+    exit $status
 }

@@ -11,3 +11,14 @@ rpm_build_package() {
 
     rpmbuild --define "_topdir `pwd`" --clean -bb "${spec}"
 }
+
+# rpm_update_repository dir
+rpm_update_repository() {
+    local repodata=$1
+
+    if [ -d "${repodata}/repodata" ]; then
+        createrepo --workers=8 --update "${repodata}"
+    else
+        createrepo --workers=8 "${repodata}"
+    fi
+}

@@ -102,9 +102,13 @@ build_one_project() {
         popd > /dev/null
     fi
     ## Step 3: build packages with rpmbuild
+    if [ -z "${version}" ]; then
+        die "failed to get version info for ${project}"
+    fi
     for spec in $(ls *.spec)
     do
         info "Building project according to ${spec}..."
+        # update version and release number
         old_version=$(awk '/^Version/ {print $2}' "${spec}")
         old_release=$(awk '/^Release/ {print $2}' "${spec}" | cut -d '%' -f1)
         if [ "${old_version}" != "${version}" ]; then
@@ -119,7 +123,21 @@ build_one_project() {
         rpm_build_package "${spec}"
     done
     ## Step 4: upload packages to repository
-    #
+    for dir in $(ls "${projectdir}/RPMS")
+    do
+        pushd "${projectdir}/RPMS/${dir}" > /dev/null
+        if [ "$(ls | wc -l)" -gt 0 ]; then
+            rsync -av --remove-sent-files * "${REPODIR}"
+        fi
+        popd > /dev/null
+    done
+    worker_count=$(ls "/tmp/packforge" | wc -l)
+    if [ -f "/tmp/packforge/all.lock" -o "${worker_count}" -gt 1 ]; then
+        info "Leave repository update to later builder"
+    else
+        info "Updating repository..."
+        rpm_update_repository "${REPODIR}"
+    fi
     ## Step 5: clean project
     popd > /dev/null
 }
@@ -150,4 +168,8 @@ build_all_projects() {
 
     ## close FIFO pipe
     exec 3>&-
+
+    ## update repository
+    info "Updating repository..."
+    rpm_update_repository "${REPODIR}"
 }
