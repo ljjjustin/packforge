@@ -40,8 +40,8 @@ build_one_project() {
         if [ "commit" = "${strategy}" ]; then
             git_update_branch "${branch}"
             latest_commit=$(git rev-parse --short HEAD)
-            timeofday=$(date '+%Y%m%d.%H%M%S')
-            version="${timeofday}.${latest_commit}"
+            timeofday=$(date '+%Y%m%d%H%M%S')
+            version="0.${timeofday}.${latest_commit}"
         elif [ "tag" = "${strategy}" ]; then
             if [ "latest" = "${tag}" ]; then
                 version=$(git_list_tags | sort -t '.' -k1,1n -k2,2n -k3,3n | tail -1)

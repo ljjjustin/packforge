@@ -49,4 +49,6 @@ PackForge is a set of scripts and utilities to build packages for UnitedStack cl
   - Add spec file
   - Add source file
     Create a directory named `SOURCES` under project's own directory.
+  - Add project specified shell scripts
+    * 
   

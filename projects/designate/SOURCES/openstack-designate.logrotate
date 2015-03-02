@@ -1,9 +1,0 @@
-/var/log/designate/*.log {
-    size 50M
-    rotate 10
-    missingok
-    notifyempty
-    su openstack-designate openstack-designate
-    copytruncate
-    sharedscripts
-}
