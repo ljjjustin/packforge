@@ -1,1 +1,3 @@
-REPODIR=/opt/repo
+SPECDIR=~/specforge
+DEVEL_REPODIR=~/RPMS/devel
+STABLE_REPODIR=~/RPMS/stable

@@ -112,7 +112,7 @@ is_valid_project() {
         return 0
     fi
 
-    local avalible_projects=( $(ls ${TOPDIR}/projects) )
+    local avalible_projects=( $(ls ${SPECDIR}/projects) )
     for val in ${avalible_projects[@]}; do
         if [[ "${val}" == "${project}" ]]; then
             return 0
@@ -134,17 +134,37 @@ is_valid_strategy() {
     done
     return 1
 }
-## cleanup before exit
+
+
+## setup cleanup function
 cleanup_on_exit() {
     exit_code=$?
 
+    # remove lock file if exists
+    if [ "x" != "x${lockfile}" ]; then
+        rm -f "${lockfile}"
+    fi
     # check exit code
-    rm -f ${lockfile}
-    exit ${exit_code}
+    exit $exit_code
 }
+trap "cleanup_on_exit" EXIT
 
 
-# Parse options
+## check basic configs
+SPECDIR=${SPECDIR:-/opt/repo/specforge}
+DEVEL_REPODIR=${DEVEL_REPODIR:-/opt/repo/ustack/devel/RPMS/x86_64}
+STABLE_REPODIR=${STABLE_REPODIR:-/opt/repo/ustack/products/RPMS/x86_64}
+
+if [ -f "${TOPDIR}/packforgerc" ]; then
+    source  "${TOPDIR}/packforgerc"
+fi
+
+[ ! -d "${SPECDIR}" ] && die "SPECDIR is obligatory, exiting.."
+[ ! -d "${DEVEL_REPODIR}" ] && die "DEVEL_REPODIR is obligatory, exiting.."
+[ ! -d "${STABLE_REPODIR}" ] && die "STABLE_REPODIR is obligatory, exiting.."
+
+
+## Parse and validate options
 workers=1
 command=''
 project=''
@@ -153,28 +173,17 @@ strategy='commit'
 tag='latest'
 parse_options $@
 
-
-# Validate command and project name
-is_valid_command ${command} || usage
-is_valid_project ${project} || usage
+is_valid_command  ${command}  || usage
+is_valid_project  ${project}  || usage
 is_valid_strategy ${strategy} || usage
 
 
-# Build package
+## Build package
 lockfile="/tmp/packforge/${project}.lock"
-[ -f ${lockfile} ] && { info "Project is under building, exit..."; exit 0; }
-mkdir -p /tmp/packforge && touch ${lockfile}
-
-trap "cleanup_on_exit" EXIT
-
-if [ -f "${TOPDIR}/packforgerc" ]; then
-    source  "${TOPDIR}/packforgerc"
+if [ -f "${lockfile}" ]; then
+    die "Project is under building, exit..."
 fi
-
-REPODIR=${REPODIR:-/tmp/repo}
-if [ ! -d "${REPODIR}" ]; then
-    mkdir -p "${REPODIR}"
-fi
+mkdir -p /tmp/packforge && touch "${lockfile}"
 
 if [[ "all" == "${project}" ]]; then
     build_all_projects "${branch}" "${strategy}"

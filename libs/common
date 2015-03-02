@@ -16,10 +16,10 @@ build_one_project() {
     local tag=${4:-latest}
     local version=""
 
-    projectdir="${TOPDIR}/projects/${project}"
-    config="${TOPDIR}/projects/${project}/CONFIG"
-    srcdir="${TOPDIR}/projects/${project}/SRC"
-    sourcesdir="${TOPDIR}/projects/${project}/SOURCES"
+    projectdir="${SPECDIR}/projects/${project}"
+    config="${projectdir}/CONFIG"
+    srcdir="${projectdir}/SRC"
+    sourcesdir="${projectdir}/SOURCES"
     ## Change work directory
     pushd "${projectdir}" > /dev/null
     if [ -r "${config}" ]; then
@@ -134,11 +134,16 @@ build_one_project() {
         rpm_build_package "${spec}"
     done
     ## Step 4: upload packages to repository
+    if [ "commit" = "${strategy}" ]; then
+        repodir="${DEVEL_REPODIR}"
+    else
+        repodir="${STABLE_REPODIR}"
+    fi
     for dir in $(ls "${projectdir}/RPMS")
     do
         pushd "${projectdir}/RPMS/${dir}" > /dev/null
         if [ "$(ls | wc -l)" -gt 0 ]; then
-            rsync -av --remove-sent-files * "${REPODIR}"
+            rsync -av --remove-sent-files * "${repodir}"
         fi
         popd > /dev/null
     done
@@ -147,7 +152,7 @@ build_one_project() {
         info "Leave repository update to later builder"
     else
         info "Updating repository..."
-        rpm_update_repository "${REPODIR}"
+        rpm_update_repository "${repodir}"
     fi
     ## HOOK: POST
     if [ -f "${projectdir}/POST" ]; then
@@ -171,7 +176,7 @@ build_all_projects() {
 
     for ((i=0; i < $workers; i++)); do echo; done >&3
 
-    for project in $(ls "${TOPDIR}/projects")
+    for project in $(ls "${SPECDIR}/projects")
     do
         read -u3
         (
@@ -188,5 +193,10 @@ build_all_projects() {
 
     ## update repository
     info "Updating repository..."
-    rpm_update_repository "${REPODIR}"
+    if [ "commit" = "${strategy}" ]; then
+        repodir="${DEVEL_REPODIR}"
+    else
+        repodir="${STABLE_REPODIR}"
+    fi
+    rpm_update_repository "${repodir}"
 }
