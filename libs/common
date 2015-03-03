@@ -25,6 +25,7 @@ build_one_project() {
     if [ -r "${config}" ]; then
         source "${config}"
     fi
+    git pull origin master
     ## Step 1: update source code
     if [ -n "${GITURL}" ]; then
         info "Fetching source code from git repository..."
@@ -84,6 +85,7 @@ build_one_project() {
         type=${TYPE:-script}
         case $type in
             python)
+                rm -fr "${srcdir}/dist" 
                 python setup.py sdist --quiet > /dev/null
                 pushd "${srcdir}/dist" > /dev/null
                 if [ ! -f "${source_code_tarball}" ]; then
@@ -132,7 +134,18 @@ build_one_project() {
             sed -i "s/Release:\([ \t]*\)\([0-9]*\)\(.*$\)/Release:\1${new_release}\3/g" "${spec}"
         fi
         rpm_build_package "${spec}"
+        if [ $? -ne 0 ]; then
+            git checkout HEAD -- .
+            die "ERROR occur when building packages, exiting..."
+        fi
     done
+    if [ "tag" = "${strategy}" ]; then
+        git add *.spec
+        git commit -m "PACKFORGE: ${project} bump to ${version}-${new_release}"
+        git push origin master
+    else
+        git checkout HEAD -- .
+    fi
     ## Step 4: upload packages to repository
     if [ "commit" = "${strategy}" ]; then
         repodir="${DEVEL_REPODIR}"
@@ -161,6 +174,7 @@ build_one_project() {
         popd > /dev/null
     fi
     ## Step 5: clean project
+    git clean -fdx
     popd > /dev/null
 }
 
