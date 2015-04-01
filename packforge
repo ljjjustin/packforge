@@ -155,6 +155,10 @@ SPECDIR=${SPECDIR:-/opt/repo/specforge}
 DEVEL_REPODIR=${DEVEL_REPODIR:-/opt/repo/ustack/devel/RPMS/x86_64}
 STABLE_REPODIR=${STABLE_REPODIR:-/opt/repo/ustack/products/RPMS/x86_64}
 
+GERRIT_USER=${GERRIT_USER:-Rpmbuilder}
+GERRIT_HOST=${GERRIT_HOST:-review.ustack.com}
+GERRIT_PORT=${GERRIT_PORT:-29418}
+
 if [ -f "${TOPDIR}/packforgerc" ]; then
     source  "${TOPDIR}/packforgerc"
 fi

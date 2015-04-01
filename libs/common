@@ -4,6 +4,7 @@
 #
 # Author: Jiajun Liu <jiajun@unitedstack.com>
 #
+source ${TOPDIR}/libs/gerrit
 source ${TOPDIR}/libs/git
 source ${TOPDIR}/libs/rpm
 
@@ -85,7 +86,7 @@ build_one_project() {
         type=${TYPE:-script}
         case $type in
             python)
-                rm -fr "${srcdir}/dist" 
+                rm -fr "${srcdir}/dist"
                 python setup.py sdist --quiet > /dev/null
                 pushd "${srcdir}/dist" > /dev/null
                 if [ ! -f "${source_code_tarball}" ]; then
@@ -142,7 +143,9 @@ build_one_project() {
     if [ "tag" = "${strategy}" ]; then
         git add *.spec
         git commit -m "PACKFORGE: ${project} bump to ${version}-${new_release}"
-        git push origin master
+        commit_id=$(git log --oneline -n1 | awk '{print $1}')
+        git review -y
+        gerrit_submit ${commit_id}
     else
         git checkout HEAD -- .
     fi
