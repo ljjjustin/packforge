@@ -10,5 +10,5 @@ gerrit_submit() {
     local commit=$1
 
     ssh -p $GERRIT_PORT $GERRIT_USER@$GERRIT_HOST \
-        gerrit review --verified +1 --submit $commit
+        gerrit review --verified +1 --code-review +2 --submit $commit
 }
