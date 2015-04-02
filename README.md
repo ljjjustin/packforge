@@ -30,6 +30,8 @@ PackForge is a set of scripts and utilities to build packages for UnitedStack cl
       `GITURL` specify a git repository from where we get can the latest source code and create source code tarball.
       * URL
       `URL` specify a link from where we can get source code tarball.
+      * NAME
+      `NAME` the really project name, because the separate directory name may be it is not the really project name.
       * VERSION
       if you specified a source code tarball do NOT abide to [Semantic Versioning](http://semver.org/lang/zh-CN/),
       you should specify `VERSION` in config file.
@@ -46,6 +48,13 @@ PackForge is a set of scripts and utilities to build packages for UnitedStack cl
       VERSION=1.13
       URL=http://pypi.python.org/packages/source/R/Routes/Routes-1.13.tar.gz
       ```
+      - a project specify GITURL and NAME (the directory name is ceph-firefly)
+      ```
+      TYPE=script
+      GITURL=git@git.ustack.com:ustack/ceph.git
+      NAME=ceph
+      ```
+
   - Add spec file
   - Add source file
     Create a directory named `SOURCES` under project's own directory.

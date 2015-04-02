@@ -80,7 +80,11 @@ build_one_project() {
         popd > /dev/null
     elif [ -n "${GITURL}" ]; then
         info "Creating source code tarball from git repository..."
-        source_code_dir="${project}-${version}"
+        if [ -n "${NAME}" ]; then
+            source_code_dir="${NAME}-${version}"
+        else
+            source_code_dir="${project}-${version}"
+        fi
         source_code_tarball="${source_code_dir}.tar.gz"
         pushd "${srcdir}" > /dev/null
         type=${TYPE:-script}

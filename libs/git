@@ -63,4 +63,9 @@ git_update_tag() {
         die "tag ${tag} do NOT exists, aborting..."
     fi
     git checkout -f ${tag} > /dev/null 2>&1
+    submodules=$(git submodule)
+    if [ ! -n "${submodule}" ]; then
+        git submodule init
+        git submodule update
+    fi
 }
