@@ -23,6 +23,9 @@ usage () {
     echo "USAGE: $0 [OPTIONS] <build|clean> <all|project name>"
     echo ""
     echo "Avaible OPTIONS:"
+    echo ""
+    echo "  -B, --specbranch <branch>   Use which branch of SPEC repository to build packages."
+    echo ""
     echo "  -s, --strategy <tag|commit> Use to controll how we generate source code tarball"
     echo "                               * tag: generate source code tarball by tag,"
     echo "                                      this is used to build production packages"
@@ -44,7 +47,7 @@ usage () {
 
 ## parse cli arguments
 parse_options() {
-    args=$(getopt -o w:b:s:t:h -l workers:,branch:,strategy:,tag:,help -- "$@")
+    args=$(getopt -o w:b:s:t:B:h -l workers:,branch:,strategy:,tag:,specbranch:,help -- "$@")
 
     if [ $? -ne 0 ]; then
         usage >&2
@@ -54,6 +57,10 @@ parse_options() {
     while true
     do
         case $1 in
+            -B|--specbranch)
+                SPECS_BRANCH=$2
+                shift 2
+                ;;
             -s|--strategy)
                 strategy=$2
                 shift 2
@@ -112,7 +119,7 @@ is_valid_project() {
         return 0
     fi
 
-    local avalible_projects=( $(ls ${SPECDIR}/projects) )
+    local avalible_projects=( $(ls ${SPECS_REPODIR}/projects) )
     for val in ${avalible_projects[@]}; do
         if [[ "${val}" == "${project}" ]]; then
             return 0
@@ -151,7 +158,8 @@ trap "cleanup_on_exit" EXIT
 
 
 ## check basic configs
-SPECDIR=${SPECDIR:-/opt/repo/specforge}
+SPECS_BRANCH=${SPECS_BRANCH:-master}
+SPECS_REPODIR=${SPECS_REPODIR:-/opt/repo/specforge}
 DEVEL_REPODIR=${DEVEL_REPODIR:-/opt/repo/ustack/devel/RPMS/x86_64}
 STABLE_REPODIR=${STABLE_REPODIR:-/opt/repo/ustack/products/RPMS/x86_64}
 
@@ -163,7 +171,7 @@ if [ -f "${TOPDIR}/packforgerc" ]; then
     source  "${TOPDIR}/packforgerc"
 fi
 
-[ ! -d "${SPECDIR}" ] && die "SPECDIR is obligatory, exiting.."
+[ ! -d "${SPECS_REPODIR}" ] && die "SPECS_REPODIR is obligatory, exiting.."
 [ ! -d "${DEVEL_REPODIR}" ] && die "DEVEL_REPODIR is obligatory, exiting.."
 [ ! -d "${STABLE_REPODIR}" ] && die "STABLE_REPODIR is obligatory, exiting.."
 
@@ -189,6 +197,7 @@ if [ -f "${lockfile}" ]; then
 fi
 mkdir -p /tmp/packforge && touch "${lockfile}"
 
+export SPECS_BRANCH
 if [[ "all" == "${project}" ]]; then
     build_all_projects "${branch}" "${strategy}"
 else

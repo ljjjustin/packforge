@@ -1,4 +1,5 @@
-SPECDIR=~/specforge
+SEPCS_BRANCH=master
+SPECS_REPODIR=~/specforge
 DEVEL_REPODIR=~/RPMS/devel
 STABLE_REPODIR=~/RPMS/stable
 

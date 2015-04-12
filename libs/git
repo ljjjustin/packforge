@@ -69,3 +69,9 @@ git_update_tag() {
         git submodule update
     fi
 }
+
+# git_cleanup
+git_cleanup() {
+    git clean -dfx
+    git reset --hard
+}

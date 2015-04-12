@@ -17,7 +17,7 @@ build_one_project() {
     local tag=${4:-latest}
     local version=""
 
-    projectdir="${SPECDIR}/projects/${project}"
+    projectdir="${SPECS_REPODIR}/projects/${project}"
     config="${projectdir}/CONFIG"
     srcdir="${projectdir}/SRC"
     sourcesdir="${projectdir}/SOURCES"
@@ -26,7 +26,7 @@ build_one_project() {
     if [ -r "${config}" ]; then
         source "${config}"
     fi
-    git pull origin master
+    git_update_branch "${SPECS_BRANCH}"
     ## Step 1: update source code
     if [ -n "${GITURL}" ]; then
         info "Fetching source code from git repository..."
@@ -37,6 +37,7 @@ build_one_project() {
         if [ ! -d ".git" ]; then
             git_clone "${GITURL}" .
         fi
+        git_cleanup
         git_fetch_tags
         git_fetch_code
         if [ "commit" = "${strategy}" ]; then
@@ -197,7 +198,7 @@ build_all_projects() {
 
     for ((i=0; i < $workers; i++)); do echo; done >&3
 
-    for project in $(ls "${SPECDIR}/projects")
+    for project in $(ls "${SPECS_REPODIR}/projects")
     do
         read -u3
         (
