@@ -26,6 +26,7 @@ build_one_project() {
     if [ -r "${config}" ]; then
         source "${config}"
     fi
+    git_fetch_code
     git_update_branch "${SPECS_BRANCH}"
     ## Step 1: update source code
     if [ -n "${GITURL}" ]; then
