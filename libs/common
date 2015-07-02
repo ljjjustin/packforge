@@ -49,7 +49,8 @@ build_one_project() {
                 die "you MUST have one tag in your repository"
             fi
             latest_tag=$(echo $taginfo | awk -F 'tag: ' '{print $2}'| awk -F ')' '{print $1}' | awk -F ',' '{print $1}')
-            version="${latest_tag}.${latest_commit}"
+            timeofday=$(date '+%Y%m%d%H%M%S')
+            version="${latest_tag}.${timeofday}.${latest_commit}"
         elif [ "tag" = "${strategy}" ]; then
             if [ "latest" = "${tag}" ]; then
                 version=$(git_list_tags | sort -t '.' -k1,1n -k2,2n -k3,3n | tail -1)
