@@ -39,6 +39,7 @@ usage () {
     echo "                               take action only if you have set GITURL in project CONFIG file"
     echo "  -w, --workers <count>       Fork multiple worker to build packages."
     echo "                                take action only if you want to build all projects"
+    echo "  -n, --nofetch <spec>   whether the fetch spec"
     echo "  -h, --help                  Show this help message."
     echo ""
     exit
@@ -47,7 +48,7 @@ usage () {
 
 ## parse cli arguments
 parse_options() {
-    args=$(getopt -o w:b:s:t:B:h -l workers:,branch:,strategy:,tag:,specbranch:,help -- "$@")
+    args=$(getopt -o w:b:s:t:B:n:h -l workers:,branch:,strategy:,tag:,specbranch:,nofetch:,help -- "$@")
 
     if [ $? -ne 0 ]; then
         usage >&2
@@ -75,6 +76,10 @@ parse_options() {
                 ;;
             -w|--workers)
                 workers=$2
+                shift 2
+                ;;
+            -n|--nofetch)
+                nofetch=$2
                 shift 2
                 ;;
             -h|--help)
@@ -178,6 +183,7 @@ fi
 
 ## Parse and validate options
 workers=1
+nofetch='none'
 command=''
 project=''
 branch='master'
